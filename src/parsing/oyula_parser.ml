@@ -37,7 +37,7 @@ let block_comment: unit t =
     and+ _ = string "|#" in
     ())
 
-let white_space = many (space_chars <|> line_comment <|> block_comment)
+let white_space = many (space_chars <|> block_comment <|> line_comment)
 
 let token (tok: 'a t): 'a t =
   tok <* white_space
