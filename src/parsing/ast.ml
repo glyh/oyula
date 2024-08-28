@@ -70,7 +70,7 @@ and ('ty, 'd, 's) flex_ast =
    'dep upd_pat_t
    -> (pat, 'dep, <pattern: yes; ..> as 'sur) flex_ast
    
-   | Pin: (* match with exisiting value *)
+   | Pin: (* match with existing value *)
    'dep id_t
    -> (pat, 'dep, <pattern: yes; ..> as 'sur) flex_ast
 
