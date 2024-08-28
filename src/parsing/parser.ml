@@ -64,7 +64,7 @@ let tok_and = token (string "and") *> return (bin AND)
 let tok_or = token (string "or") *> return (bin OR)
 
 let tok_lpar = token (char '(')
-let tok_rpar = token (char '(')
+let tok_rpar = token (char ')')
 let tok_lbkt = token (char '[')
 let tok_rbkt = token (char ']')
 let tok_comma = token (char ',')
@@ -90,18 +90,15 @@ let tier_left e op =
     (lift2 (fun f x -> f acc x) op e >>= go) <|> return acc in
   e >>= go
 
-let wrapped_list l r sep (p: 'a t): 'a list t =
+let wrapped_list lsep rsep sep (p: 'a t): 'a list t =
   let list_rest =
     fix (fun list_rest ->
-      (r *> return [])
-      <|> ((p >>| fun x -> [x]) <* r )
-      <|> (
-        let+ hd = p <* sep
-        and+ rest = list_rest in
-        hd :: rest)
+      (rsep *> return [])
+      <|> lift2 (fun x _ -> [x]) p rsep
+      <|> lift3 (fun x _ xs -> x :: xs) p sep list_rest
     )
   in
-  l *> list_rest
+  lsep *> list_rest
 
 let sep_list sep (p: 'a t): 'a list t =
   fix (fun sep_list ->
@@ -164,8 +161,7 @@ let pattern: top pat_t t =
       | ps -> PatTuple ps
     in
     let pprimary =
-      (tok_lpar *> pattern <* tok_rpar)
-      <|> pany
+      pany
       <|> plit
       <|> plist
       <|> pnest_or_tuple
@@ -195,7 +191,7 @@ let%test_module "parsing" = (module struct
     let expected = Binary(ADD, Lit (Int 1), Binary (MUL, Lit (Int 3), Lit (Int 4))) in
     ast_expect exp_simple to_parse expected
   let%test "simple match" =
-    let to_parse = "[1, 2, a]" in
-    let expected = PatList[PLit (Int 1); PLit (Int 2); Updatable (Bind (Concrete "a"))] in
+    let to_parse = "[1, (9, 8, c), a]" in
+    let expected = PatList[PLit (Int 1); PatTuple[PLit (Int 9); PLit (Int 8); Updatable (Bind (Concrete "c"))]; Updatable (Bind (Concrete "a"))] in
     ast_expect pattern to_parse expected
 end) 
