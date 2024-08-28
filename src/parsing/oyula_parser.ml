@@ -7,13 +7,17 @@ open Ast
 let space_chars : unit t =
   skip (List.mem ['\t'; ' '] ~equal: equal_char)
 
+type line_comment_case =
+  | Short
+  | NotLineComment
+  | Yes
+
+(* line comment doesn't consume the newline token *)
 let line_comment : unit t =
-  string "#\n" *> return () <|>
-  let+ _ = char '#'
-  and+ _ = satisfy (fun c -> equal_char c '|')
-  and+ _ = take_till (fun c -> equal_char c '\n')
-  and+ _ = char '\n' in
-  ()
+  char '#' *> peek_char >>= function
+    | None -> return ()
+    | Some ('|') -> fail "Block comment expected"
+    | _ -> skip_while (fun c -> not (equal_char c '\n'))
   
 let block_comment: unit t =
   let non_nested: unit t = 
@@ -91,13 +95,13 @@ let exp_simple: expr t =
     pred_disjunct)
 
 let%test_module "parsing" = (module struct
-  let parse_expect str ast =
+  let ast_expect str ast =
     match parse_string ~consume:All exp_simple str with
     | Ok v ->  equal_int 0 (ast_compare v ast)
     | _ -> false
 
   let%test "simple expression" =
-    let to_parse = "1 + 3 *   4  " in
+    let to_parse = "1 + 3 * #|nested #|comments|# just like #|this one|#|#  4  #and also line comments" in
     let expected = (Binary(ADD, Lit (Int 1), Binary (MUL, Lit (Int 3), Lit (Int 4)))) in
-    parse_expect to_parse expected
+    ast_expect to_parse expected
 end) 
