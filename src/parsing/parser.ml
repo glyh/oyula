@@ -169,7 +169,7 @@ let _expression (pattern: top pat_t t): top exp_t t =
       (block tok_end)
     in
 
-    expr_like <|> if_stmt)
+    do_stmt <|> if_stmt <|> expr_like)
 
 let _updatable_pattern (pattern: top pat_t t): top upd_pat_t t =
   let expression = _expression pattern in
@@ -255,5 +255,10 @@ let%test_module "parsing" = (module struct
   let%test "simple if statement 4" =
     let to_parse = "if True \n 1 \n else \n 2 \n end" in
     let expected = IfSeq(Lit(Bool true), [Lit(Int 1)], [Lit(Int 2)]) in
+    ast_expect expression to_parse expected
+
+  let%test "do block" =
+    let to_parse = "do\n 1 \n 2\n 3\n end" in
+    let expected = Seq([Lit(Int 1); Lit(Int 2); Lit(Int 3)]) in
     ast_expect expression to_parse expected
 end) 
