@@ -73,7 +73,7 @@ let tok_underscore = token (char '_')
 let tok_with = token (string "with")
 let tok_pipe = token (char '|')
 let tok_dot = token (char '.')
-let tok_match = token (char '.')
+let tok_match = token (char '=')
 
 
 let tok_id = 
@@ -125,7 +125,7 @@ let _exp_simple (pattern: top pat_t t): top exp_t t =
     let pred_disjunct = tier_left pred_conjunct tok_or in 
     let match_stmt = 
       fix (fun match_stmt -> 
-        lift3 (fun pat _ exp -> BindMatch(pat, exp)) pattern tok_match match_stmt
+        (lift3 (fun pat _ exp -> BindMatch(pat, exp)) pattern tok_match match_stmt)
         <|> pred_disjunct)
     in
     match_stmt)
@@ -187,9 +187,10 @@ let%test_module "parsing" = (module struct
     | _ -> false
 
   let%test "simple expression" =
-    let to_parse = "1 + 3 * #|nested #|comments|# just like #|this one|#|#  4  #and also line comments" in
-    let expected = Binary(ADD, Lit (Int 1), Binary (MUL, Lit (Int 3), Lit (Int 4))) in
+    let to_parse = "a = 1 + 3 * #|nested #|comments|# just like #|this one|#|#  4  #and also line comments" in
+    let expected = BindMatch(Updatable (Bind (Concrete "a")), Binary(ADD, Lit (Int 1), Binary (MUL, Lit (Int 3), Lit (Int 4)))) in
     ast_expect exp_simple to_parse expected
+
   let%test "simple match" =
     let to_parse = "[1, (9, 8, c), a]" in
     let expected = PatList[PLit (Int 1); PatTuple[PLit (Int 9); PLit (Int 8); Updatable (Bind (Concrete "c"))]; Updatable (Bind (Concrete "a"))] in
