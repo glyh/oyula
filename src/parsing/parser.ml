@@ -5,7 +5,7 @@ open Ast
 (* Comments *)
 
 let space_chars : unit t =
-  skip (List.mem ['\t'; ' '; '\r'; '\n'] ~equal: equal_char)
+  skip (List.mem ['\t'; ' '; '\r'] ~equal: equal_char)
 
 let block_comment: unit t =
   let non_nested: unit t = 
@@ -39,42 +39,53 @@ let white_space = many (space_chars <|> block_comment <|> line_comment)
 let token (tok: 'a t): 'a t =
   tok <* white_space
 
-let tok_int = token (take_while1 (function '0' .. '9' -> true | _ -> false) >>| int_of_string)
+let atom_int = token (take_while1 (function '0' .. '9' -> true | _ -> false) >>| int_of_string)
+let atom_true = token (string "True") *> (return true)
+let atom_false = token (string "False") *> (return false)
 
+let tok_nl = token (char '\n')
+let tok_nl_star = many tok_nl
+let tok_nl_plus = many1 tok_nl
 
 let bin op lhs rhs = Binary(op, lhs, rhs)
 
-let tok_as = token (string "::") *> return (bin AS)
+let operator (type a) (tok: a t): a t = (token tok) <* tok_nl_star 
 
-let tok_mul = token (char '*') *> return (bin MUL)
-let tok_div = token (char '/') *> return (bin DIV)
+let op_as = operator (string "::") *> return (bin AS)
 
-let tok_add = token (char '+') *> return (bin ADD)
-let tok_sub = token (char '-') *> return (bin SUB)
+let op_mul = operator (char '*') *> return (bin MUL)
+let op_div = operator (char '/') *> return (bin DIV)
 
-let tok_eq = token (string "==") *> return (bin EQ)
-let tok_ne = token (string "!=") *> return (bin NE)
-let tok_le = token (string "<=") *> return (bin LE)
-let tok_ge = token (string ">=") *> return (bin GE)
-let tok_lt = token (string "<") *> return (bin LT)
-let tok_gt = token (string ">") *> return (bin GT)
+let op_add = operator (char '+') *> return (bin ADD)
+let op_sub = operator (char '-') *> return (bin SUB)
 
-let tok_and = token (string "and") *> return (bin AND)
+let op_eq = operator (string "==") *> return (bin EQ)
+let op_ne = operator (string "!=") *> return (bin NE)
+let op_le = operator (string "<=") *> return (bin LE)
+let op_ge = operator (string ">=") *> return (bin GE)
+let op_lt = operator (string "<") *> return (bin LT)
+let op_gt = operator (string ">") *> return (bin GT)
 
-let tok_or = token (string "or") *> return (bin OR)
+let op_and = operator (string "and") *> return (bin AND)
 
-let tok_lpar = token (char '(')
+let op_or = operator (string "or") *> return (bin OR)
+
+let op_lpar = operator (char '(')
 let tok_rpar = token (char ')')
-let tok_lbkt = token (char '[')
+let op_lbkt = operator (char '[')
 let tok_rbkt = token (char ']')
-let tok_comma = token (char ',')
+let op_comma = operator (char ',')
 let tok_underscore = token (char '_')
 
-let tok_with = token (string "with")
-let tok_pipe = token (char '|')
-let tok_dot = token (char '.')
+let op_with = operator (string "with")
+let op_pipe = operator (char '|')
+let op_dot = operator (char '.')
 let tok_match = token (char '=')
-
+let tok_if = token (string "if")
+let tok_then = token (string "then")
+let tok_else = token (string "else")
+let tok_end = token (string "end")
+let tok_colon = token (char ':')
 
 let tok_id = 
   let id1 = satisfy (fun c -> Char.is_alpha c || List.mem ['_'] ~equal: equal_char c) in
@@ -84,6 +95,8 @@ let tok_id =
 (* Parsing *)
 
 (* Helper Functions *)
+
+let lift5 f a b c d e = (lift4 f a b c d) <*> e
 
 let tier_left e op =
   let rec go acc =
@@ -105,41 +118,62 @@ let sep_list sep (p: 'a t): 'a list t =
     (p >>| fun x -> [x]) <|> lift3 (fun hd _ rest -> hd :: rest) p sep sep_list)
 
 let atom: atom t =
-  tok_int >>= (fun i -> return (Int i))
+  atom_int >>= (fun i -> return (Int i))
+  <|> ((atom_true <|> atom_false) >>= (fun b -> return (Bool b)))
 
 let identifier: top id_t t =
   tok_id >>| fun id -> Concrete id
 
-let _exp_simple (pattern: top pat_t t): top exp_t t =
-  fix (fun expr -> 
-    let primary = 
-      tok_lpar *> expr <* tok_rpar
-      <|> (atom >>| fun a -> Lit a) 
-      <|> (identifier >>| fun id -> Val id) 
+let _block (type a) (expression: top exp_t t) (block_terminator: a t): top exp_t list t =
+  (tok_colon *> expression >>| (fun x -> [x]))
+  <|> (tok_nl_plus *> (many_till (expression <* tok_nl_plus) block_terminator))
+
+let _block_alt (type a b) (expression: top exp_t t) (block_terminator_exp: a t) (block_terminator_blk: b t): top exp_t list t =
+  (tok_colon *> expression >>| (fun x -> [x])<* block_terminator_exp)
+  <|> (tok_nl_plus *> (many_till (expression <* tok_nl_plus) block_terminator_blk))
+
+let _expression (pattern: top pat_t t): top exp_t t =
+  fix (fun expression -> 
+    let primary =
+      op_lpar *> expression <* tok_rpar
+      <|> (atom >>| fun a -> Lit a)
+      <|> (identifier >>| fun id -> Val id)
     in
-    let annonated = tier_left primary tok_as in
-    let factor = tier_left annonated (tok_mul <|> tok_div) in
-    let term = tier_left factor (tok_add <|> tok_sub) in 
-    let predicate = tier_left term (tok_eq <|> tok_ne <|> tok_le <|> tok_ge <|> tok_lt <|> tok_gt) in 
-    let pred_conjunct = tier_left predicate tok_and in 
-    let pred_disjunct = tier_left pred_conjunct tok_or in 
+    let annonated = tier_left primary op_as in
+    let factor = tier_left annonated (op_mul <|> op_div) in
+    let term = tier_left factor (op_add <|> op_sub) in 
+    let predicate = tier_left term (op_eq <|> op_ne <|> op_le <|> op_ge <|> op_lt <|> op_gt) in 
+    let pred_conjunct = tier_left predicate op_and in 
+    let pred_disjunct = tier_left pred_conjunct op_or in 
     let match_stmt = 
       fix (fun match_stmt -> 
         (lift3 (fun pat _ exp -> BindMatch(pat, exp)) pattern tok_match match_stmt)
         <|> pred_disjunct)
     in
-    match_stmt)
+    let block_alt (type a b) (term_exp: a t) (term_blk: b t) = _block_alt expression term_exp term_blk in
+    let block (type a) (term: a t) = _block expression term in
+    let if_stmt = fix (fun if_stmt ->
+      (lift4
+        (fun _ cond then_clause else_clause -> IfSeq(cond, then_clause, else_clause)) 
+        tok_if
+        if_stmt
+        (block_alt tok_else tok_else)
+        (block tok_end)
+      )
+      <|> match_stmt)
+    in
+    if_stmt)
 
 let _updatable_pattern (pattern: top pat_t t): top upd_pat_t t =
-  let exp_simple = _exp_simple pattern in
+  let expression = _expression pattern in
 
-  let arg_list = wrapped_list tok_lpar tok_rpar tok_comma exp_simple in
+  let arg_list = wrapped_list op_lpar tok_rpar op_comma expression in
   let bind = identifier >>| fun b -> Bind b in
   let upd_primary = bind in
   let rec go_lens acc = 
     (lift3
      (fun _ _method args -> Lens(acc, _method, args))
-     tok_dot
+     op_dot
      identifier
      arg_list
      >>= go_lens)
@@ -150,13 +184,13 @@ let _updatable_pattern (pattern: top pat_t t): top upd_pat_t t =
 let pattern: top pat_t t =
   fix (fun (pattern: top pat_t t) ->
     let updatable_pattern = _updatable_pattern pattern in
-    let exp_simple = _exp_simple pattern in
+    let expression = _expression pattern in
 
     let plit = atom >>| fun a -> PLit a in
     let pany = tok_underscore *> (return (PAny ())) in
     let pupdatable = updatable_pattern >>| fun up -> Updatable up in
-    let plist = wrapped_list tok_lbkt tok_rbkt tok_comma pattern >>| fun ps -> PatList ps in
-    let pnest_or_tuple = wrapped_list tok_lpar tok_rpar tok_comma pattern >>| function
+    let plist = wrapped_list op_lbkt tok_rbkt op_comma pattern >>| fun ps -> PatList ps in
+    let pnest_or_tuple = wrapped_list op_lpar tok_rpar op_comma pattern >>| function
       | [x] -> x
       | ps -> PatTuple ps
     in
@@ -168,16 +202,16 @@ let pattern: top pat_t t =
       <|> pupdatable
     in
     let withed = 
-      pprimary <|> lift3 (fun pat _ cond -> With(pat, cond)) pprimary tok_with exp_simple
+      pprimary <|> lift3 (fun pat _ cond -> With(pat, cond)) pprimary op_with expression
     in
-    let unioned = sep_list tok_pipe withed >>| function 
+    let unioned = sep_list op_pipe withed >>| function 
     | [single] -> single 
     | ps -> Union ps
     in
     unioned
   )
 
-let exp_simple = _exp_simple pattern
+let expression = _expression pattern
 let updatable_pattern = _updatable_pattern pattern
 
 let%test_module "parsing" = (module struct
@@ -186,13 +220,33 @@ let%test_module "parsing" = (module struct
     | Ok v ->  equal_int 0 (ast_compare v ast)
     | _ -> false
 
-  let%test "simple expression" =
+  let%test "simple pattern matching" =
     let to_parse = "a = 1 + 3 * #|nested #|comments|# just like #|this one|#|#  4  #and also line comments" in
     let expected = BindMatch(Updatable (Bind (Concrete "a")), Binary(ADD, Lit (Int 1), Binary (MUL, Lit (Int 3), Lit (Int 4)))) in
-    ast_expect exp_simple to_parse expected
+    ast_expect expression to_parse expected
 
   let%test "simple match" =
     let to_parse = "[1, (9, 8, c), a]" in
     let expected = PatList[PLit (Int 1); PatTuple[PLit (Int 9); PLit (Int 8); Updatable (Bind (Concrete "c"))]; Updatable (Bind (Concrete "a"))] in
     ast_expect pattern to_parse expected
+
+  let%test "simple if statement 1" =
+    let to_parse = "if True: 1 else: 2" in
+    let expected = IfSeq(Lit(Bool true), [Lit(Int 1)], [Lit(Int 2)]) in
+    ast_expect expression to_parse expected
+
+  let%test "simple if statement 2" =
+    let to_parse = "if True: 1 else \n 2 \n end" in
+    let expected = IfSeq(Lit(Bool true), [Lit(Int 1)], [Lit(Int 2)]) in
+    ast_expect expression to_parse expected
+
+  let%test "simple if statement 3" =
+    let to_parse = "if True \n 1 \n else: 2" in
+    let expected = IfSeq(Lit(Bool true), [Lit(Int 1)], [Lit(Int 2)]) in
+    ast_expect expression to_parse expected
+
+  let%test "simple if statement 4" =
+    let to_parse = "if True \n 1 \n else \n 2 \n end" in
+    let expected = IfSeq(Lit(Bool true), [Lit(Int 1)], [Lit(Int 2)]) in
+    ast_expect expression to_parse expected
 end) 
