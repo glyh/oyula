@@ -86,6 +86,7 @@ let tok_then = token (string "then")
 let tok_else = token (string "else")
 let tok_end = token (string "end")
 let tok_colon = token (char ':')
+let tok_do = token (string "do")
 
 let tok_id = 
   let id1 = satisfy (fun c -> Char.is_alpha c || List.mem ['_'] ~equal: equal_char c) in
@@ -150,19 +151,25 @@ let _expression (pattern: top pat_t t): top exp_t t =
         (lift3 (fun pat _ exp -> BindMatch(pat, exp)) pattern tok_match match_stmt)
         <|> pred_disjunct)
     in
+    let expr_like = match_stmt in
+
     let block_alt (type a b) (term_exp: a t) (term_blk: b t) = _block_alt expression term_exp term_blk in
     let block (type a) (term: a t) = _block expression term in
-    let if_stmt = fix (fun if_stmt ->
-      (lift4
+    let if_stmt =
+      lift4
         (fun _ cond then_clause else_clause -> IfSeq(cond, then_clause, else_clause)) 
         tok_if
-        if_stmt
+        expression
         (block_alt tok_else tok_else)
         (block tok_end)
-      )
-      <|> match_stmt)
+    in let do_stmt =
+      lift2
+      (fun _ exps -> Seq(exps))
+      tok_do
+      (block tok_end)
     in
-    if_stmt)
+
+    expr_like <|> if_stmt)
 
 let _updatable_pattern (pattern: top pat_t t): top upd_pat_t t =
   let expression = _expression pattern in
