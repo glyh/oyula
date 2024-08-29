@@ -99,10 +99,13 @@ let tok_id =
 
 let lift5 f a b c d e = (lift4 f a b c d) <*> e
 
-let tier_left e op =
+let reduce_left init ele op =
   let rec go acc =
-    (lift2 (fun f x -> f acc x) op e >>= go) <|> return acc in
-  e >>= go
+    (lift2 (fun f x -> f acc x) op ele >>= go) <|> return acc in
+  init >>= go
+
+let tier_left e op =
+  reduce_left e e op
 
 let wrapped_list lsep rsep sep (p: 'a t): 'a list t =
   let list_rest =
@@ -135,12 +138,16 @@ let _block_alt (type a b) (expression: top exp_t t) (block_terminator_exp: a t) 
 
 let _expression (pattern: top pat_t t): top exp_t t =
   fix (fun expression -> 
+    let arg_list = wrapped_list op_lpar tok_rpar op_comma expression in
+    let function_call = lift2 (fun fn args -> (fn, args)) identifier arg_list in
     let primary =
       op_lpar *> expression <* tok_rpar
+      <|> (function_call >>| fun (fn, args) -> Call(fn, args))
       <|> (atom >>| fun a -> Lit a)
       <|> (identifier >>| fun id -> Val id)
     in
-    let annonated = tier_left primary op_as in
+    let ufcs = reduce_left primary function_call (op_dot *> return (fun inner (fn, args) -> Call(fn, inner :: args))) in
+    let annonated = tier_left ufcs op_as in
     let factor = tier_left annonated (op_mul <|> op_div) in
     let term = tier_left factor (op_add <|> op_sub) in 
     let predicate = tier_left term (op_eq <|> op_ne <|> op_le <|> op_ge <|> op_lt <|> op_gt) in 
@@ -226,6 +233,20 @@ let%test_module "parsing" = (module struct
     match parse_string ~consume:All p str with
     | Ok v ->  equal_int 0 (ast_compare v ast)
     | _ -> false
+
+  let%test "ufcs and calls" =
+    let to_parse = "g(1.add(3).mul(4).fn(9, 10),100)" in
+    let expected = 
+      Call(Concrete "g", [
+        Call(Concrete "fn", [
+          Call(Concrete "mul", [Call(Concrete "add", [Lit (Int 1); Lit (Int 3)]); Lit (Int 4)]);
+          Lit (Int 9);
+          Lit (Int 10)
+        ]);
+        Lit (Int 100)
+      ])
+    in
+    ast_expect expression to_parse expected
 
   let%test "simple pattern matching" =
     let to_parse = "a = 1 + 3 * #|nested #|comments|# just like #|this one|#|#  4  #and also line comments" in
