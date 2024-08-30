@@ -1,3 +1,5 @@
+(* TODO: use `Fix` *)
+
 open Core
 open Angstrom
 open Ast
@@ -89,6 +91,8 @@ let tok_end = token (string "end")
 let tok_colon = token (char ':')
 let tok_do = token (string "do")
 let tok_fn = token (string "fn")
+let tok_rec = token (string "rec")
+let op_semicol = operator (string ";")
 
 let tok_id = 
   let id1 = satisfy (fun c -> Char.is_alpha c || List.mem ['_'] ~equal: equal_char c) in
@@ -141,7 +145,49 @@ let _block_alt (type a b) (expression: top exp_t t) (block_terminator_exp: a t) 
 let id_to_lhs (id: top id_t): top pat_t =
   Updatable(Bind(id))
 
-let _expression (pattern: top pat_t t): top exp_t t =
+let if_stmt (expression: top exp_t t): top exp_t t =
+  let block_alt (type a b) (term_exp: a t) (term_blk: b t) = _block_alt expression term_exp term_blk in
+  let block (type a) (term: a t) = _block expression term in
+    lift4
+      (fun _ cond then_clause else_clause -> IfSeq(cond, then_clause, else_clause)) 
+      tok_if
+      expression
+      (block_alt tok_else tok_else)
+      (block tok_end)
+
+let do_stmt (expression: top exp_t t): top exp_t t =
+  let block (type a) (term: a t) = _block expression term in
+    lift2
+    (fun _ exps -> Seq(exps))
+    tok_do
+    (block tok_end)
+
+let lambda (pattern_complex: top pat_complex_t t) (expression: top exp_t t): top exp_t t =
+  let block (type a) (term: a t) = _block expression term in
+  let params_list = wrapped_list op_lpar rop_rpar op_comma pattern_complex in
+    lift4 (fun _ id params blk -> 
+      match id with
+      | Some(id) -> BindMatch(PatComplex(Updatable(Bind(id)), []), LamPatSeq(params, blk))
+      | None -> LamPatSeq(params, blk)
+    )
+    tok_fn
+    (option None (identifier >>| fun x -> Some(x)))
+    params_list
+    (block tok_end)
+
+let match_stmt (pattern: top pat_t t) (expression: top exp_t t): top exp_t t =
+  lift4 (fun is_rec p ps rhs -> 
+    let pc = PatComplex(p, ps) in
+    if is_rec then
+      BindMatch(pc, Call(Concrete("fix"), [LamPatSeq([pc], [rhs])]))
+    else 
+      BindMatch(pc, rhs))
+    (option false (tok_rec *> return true))
+    (pattern <* tok_match)
+    (many (pattern <* tok_match))
+    expression
+
+let _expression (pattern_complex: top pat_complex_t t) (pattern: top pat_t t): top exp_t t =
   fix (fun expression -> 
     let arg_list = wrapped_list op_lpar rop_rpar op_comma expression in
     let function_call = lift2 (fun fn args -> (fn, args)) identifier arg_list in
@@ -158,43 +204,26 @@ let _expression (pattern: top pat_t t): top exp_t t =
     let predicate = tier_left term (op_eq <|> op_ne <|> op_le <|> op_ge <|> op_lt <|> op_gt) in 
     let pred_conjunct = tier_left predicate op_and in 
     let pred_disjunct = tier_left pred_conjunct op_or in 
-    let match_stmt = 
-      fix (fun match_stmt -> 
-        (lift3 (fun pat _ exp -> BindMatch(pat, exp)) pattern tok_match match_stmt)
-        <|> pred_disjunct)
-    in
-    let expr_like = match_stmt in
+    let seq_exp = lift2
+      (fun head rest -> 
+        match rest with
+        | [] -> head
+        | rest -> Seq(head :: rest))
+      pred_disjunct
+      (many (op_semicol *> pred_disjunct)) in 
+    let expr_like = seq_exp in
 
-    let block_alt (type a b) (term_exp: a t) (term_blk: b t) = _block_alt expression term_exp term_blk in
-    let block (type a) (term: a t) = _block expression term in
-    let if_stmt =
-      lift4
-        (fun _ cond then_clause else_clause -> IfSeq(cond, then_clause, else_clause)) 
-        tok_if
-        expression
-        (block_alt tok_else tok_else)
-        (block tok_end)
-    in let do_stmt =
-      lift2
-      (fun _ exps -> Seq(exps))
-      tok_do
-      (block tok_end)
-    in let params_list = wrapped_list op_lpar rop_rpar op_comma pattern
-    in let lambda = 
-      lift4 (fun _ id params blk -> 
-        match id with
-        | Some(id) -> BindMatch(Updatable(Bind(id)), LamPatSeq(params, blk))
-        | None -> LamPatSeq(params, blk)
-      )
-      tok_fn
-      (option None (identifier >>| fun x -> Some(x)))
-      params_list
-      (block tok_end)
-    in
-    do_stmt <|> if_stmt <|> lambda <|> expr_like)
+    (do_stmt expression)
+    <|> (if_stmt expression)
+    <|> (lambda pattern_complex expression)
+    <|> (match_stmt pattern expression)
+    <|> expr_like)
+
+let _pattern_complex (pattern: top pat_t t): top pat_complex_t t =
+  lift2 (fun p ps -> PatComplex(p, ps)) pattern (many (tok_match *> pattern)) 
 
 let _updatable_pattern (pattern: top pat_t t): top upd_pat_t t =
-  let expression = _expression pattern in
+  let expression = _expression (_pattern_complex pattern) pattern in
 
   let arg_list = wrapped_list op_lpar rop_rpar op_comma expression in
   let bind = identifier >>| fun b -> Bind b in
@@ -212,8 +241,9 @@ let _updatable_pattern (pattern: top pat_t t): top upd_pat_t t =
 
 let pattern: top pat_t t =
   fix (fun (pattern: top pat_t t) ->
+    let pattern_complex = _pattern_complex pattern in
     let updatable_pattern = _updatable_pattern pattern in
-    let expression = _expression pattern in
+    let expression = _expression pattern_complex pattern in
 
     let plit = atom >>| fun a -> PLit a in
     let pany = tok_underscore *> (return (PAny ())) in
@@ -240,66 +270,73 @@ let pattern: top pat_t t =
     unioned
   )
 
-let expression = _expression pattern
+let expression = _expression (_pattern_complex pattern) pattern
 let updatable_pattern = _updatable_pattern pattern
 
+let p_wrap (type a) (p: a t): a t = (white_space *> tok_nl_star *> p <* tok_nl_star)
+
 let%test_module "parsing" = (module struct
-  let ast_expect (type a b c) (p: (a, b, c) flex_ast t) str (ast: (a, b, c) flex_ast) =
-    match parse_string ~consume:All p str with
-    | Ok v ->  equal_int 0 (ast_compare v ast)
+  let ast_expect (type ty) (p: (ty, top) gen_ast t) normalized to_normalize =
+    match parse_string ~consume:All (p_wrap p) to_normalize with
+    | Ok v -> 
+        let expect_normalized = ast_format v in
+        (*print_endline expect_normalized;*)
+        equal_string expect_normalized normalized
     | _ -> false
 
   let%test "ufcs and calls" =
     let to_parse = "g(1.add(3).mul(4).fn(9, 10),100)" in
-    let expected = 
-      Call(Concrete "g", [
-        Call(Concrete "fn", [
-          Call(Concrete "mul", [Call(Concrete "add", [Lit (Int 1); Lit (Int 3)]); Lit (Int 4)]);
-          Lit (Int 9);
-          Lit (Int 10)
-        ]);
-        Lit (Int 100)
-      ])
-    in
-    ast_expect expression to_parse expected
+    let expected = "g(fn(mul(add(1,3),4),9,10),100)" in
+    ast_expect expression expected to_parse
 
-  let%test "simple pattern matching" =
+  let%test "comments" =
     let to_parse = "a = 1 + 3 * #|nested #|comments|# just like #|this one|#|#  4  #and also line comments" in
-    let expected = BindMatch(Updatable (Bind (Concrete "a")), Binary(ADD, Lit (Int 1), Binary (MUL, Lit (Int 3), Lit (Int 4)))) in
-    ast_expect expression to_parse expected
+    let expected = "a=(1 + (3 * 4))" in
+    ast_expect expression expected to_parse
 
-  let%test "simple match" =
+  let%test "rec pattern" =
+    let to_parse = {|
+      rec fib = fn (x)
+        if x < 1
+          1
+        else
+          fib(x - 1) + fib(x - 2)
+        end
+      end
+    |} in
+    let expected = "fib=fix(fn(fib): fn(x): if (x < 1): 1 else: (fib((x - 1)) + fib((x - 2))))" in
+    ast_expect expression expected to_parse
+
+  let%test "simple pattern" =
     let to_parse = "[1, (9, 8, c), a]" in
-    let expected = PatList[PLit (Int 1); PatTuple[PLit (Int 9); PLit (Int 8); Updatable (Bind (Concrete "c"))]; Updatable (Bind (Concrete "a"))] in
-    ast_expect pattern to_parse expected
+    let expected = "[1,(9,8,c),a]" in
+    ast_expect pattern expected to_parse
 
-  let%test "simple if statement 1" =
-    let to_parse = "if True: 1 else: 2" in
-    let expected = IfSeq(Lit(Bool true), [Lit(Int 1)], [Lit(Int 2)]) in
-    ast_expect expression to_parse expected
+  let%test "simple if statements" =
+    let to_parses = 
+      [ "if True: 1 else: 2"
+      ; "if True: 1 else  \n 2 \n end" 
+      ; "if True \n 1 \n else:2" 
+      ; "if True \n 1 \n else  \n 2 \n end" 
+      ] in
+    let expected = "if True: 1 else: 2" in
+    List.for_all to_parses ~f:(ast_expect expression expected)
 
-  let%test "simple if statement 2" =
-    let to_parse = "if True: 1 else \n 2 \n end" in
-    let expected = IfSeq(Lit(Bool true), [Lit(Int 1)], [Lit(Int 2)]) in
-    ast_expect expression to_parse expected
+  let%test "sequences" =
+    let to_parses = 
+      [ "do\n 1 \n 2\n 3\n end"
+      ; "1; 2; 3"
+      ] in
+    let expected = "(1;2;3)" in
+    List.for_all to_parses ~f:(ast_expect expression expected)
 
-  let%test "simple if statement 3" =
-    let to_parse = "if True \n 1 \n else: 2" in
-    let expected = IfSeq(Lit(Bool true), [Lit(Int 1)], [Lit(Int 2)]) in
-    ast_expect expression to_parse expected
 
-  let%test "simple if statement 4" =
-    let to_parse = "if True \n 1 \n else \n 2 \n end" in
-    let expected = IfSeq(Lit(Bool true), [Lit(Int 1)], [Lit(Int 2)]) in
-    ast_expect expression to_parse expected
+  let%test "simple lambdas" =
+    let to_parses = 
+      [ "fn f(x)\nx+1\nend"
+      ; "fn f(x): x + 1" 
+      ] in
+    let expected = "f=fn(x): (x + 1)" in
+    List.for_all to_parses ~f:(ast_expect expression expected)
 
-  let%test "do block" =
-    let to_parse = "do\n 1 \n 2\n 3\n end" in
-    let expected = Seq([Lit(Int 1); Lit(Int 2); Lit(Int 3)]) in
-    ast_expect expression to_parse expected
-
-  let%test "lambda" =
-    let to_parse = "fn f(x): x + 1" in
-    let expected = BindMatch(Updatable(Bind(Concrete("f"))), LamPatSeq([Updatable(Bind(Concrete "x"))], [Binary(ADD, Val(Concrete "x"), Lit(Int 1))])) in
-    ast_expect expression to_parse expected
 end) 

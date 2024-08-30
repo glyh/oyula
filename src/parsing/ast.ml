@@ -1,11 +1,36 @@
+let poly_compare = compare
+
+open Core
+
 type un_op = 
      NOT
+
+let string_of_un_op = function
+| NOT -> "not"
 
 type bin_op = 
    | EQ | NE | LE | LT | GE | GT
    | ADD | SUB | MUL | DIV
    | AND | OR
    | AS (* type annotation *)
+
+let string_of_bin_op = function
+| EQ -> "=="
+| NE -> "!="
+
+| LE -> "<="
+| LT -> "<"
+| GE -> ">="
+| GT -> ">"
+
+| ADD -> "+"
+| SUB -> "-"
+| MUL -> "*"
+| DIV -> "//"
+| AND -> "and"
+| OR -> "or"
+| AS -> "as"
+
 
 type atom = 
    | Int of int
@@ -15,6 +40,28 @@ type atom =
    | Bool of bool
    (* TODO: dependent types
    | Type of Type.ty *)
+
+let sprintf = Core.sprintf
+
+let append_escape acc c =
+   match c with
+   | '\n' -> acc ^ "\\\n"
+   | '\\' -> acc ^ "\\\\"
+   | c -> acc ^ (String.of_char c)
+
+let escape str = 
+   str
+   |> String.to_array
+   |> Array.fold ~init:"" ~f:append_escape
+
+let string_of_atom (a: atom) = 
+   match a with
+   | Int i -> string_of_int i
+   | F64 f -> string_of_float f
+   | Str s -> sprintf {|"%s"|} (escape s)
+   | Keyword k -> ":" ^ k
+   | Bool true -> "True"
+   | Bool false -> "False"
 
 type ty = 
    | TInt
@@ -35,11 +82,13 @@ type no = NO
 type exp = EXP 
 type upd_pat = UPDPAT
 type pat = PAT
+type pat_complex = PAT_COMPLEX
 type id = ID
 
 type 'a exp_t = (exp, 'a) gen_ast
 and 'a upd_pat_t = (upd_pat, 'a) gen_ast
 and 'a pat_t = (pat, 'a) gen_ast
+and 'a pat_complex_t = (pat_complex, 'a) gen_ast
 and 'a id_t = (id, 'a) gen_ast
 and ('ty, 'a) gen_ast = ('ty, 'a, 'a) flex_ast
 
@@ -95,6 +144,12 @@ and ('ty, 'd, 's) flex_ast =
    -> (pat, 'dep, <pattern: yes; ..> as 'sur) flex_ast
 
 
+   (* Pattern Complex *)
+   | PatComplex:
+   'dep pat_t * 'dep pat_t list
+   -> (pat_complex, 'dep, <pattern: yes; ..> as 'sur) flex_ast
+      
+
    (* EXPRESSION *)
 
    (* a temporary solution, we may add algebraic effects later *)
@@ -120,7 +175,7 @@ and ('ty, 'd, 's) flex_ast =
 
    | Fix:
    'dep exp_t
-   -> (exp, 'dep, <recbind: no; ..> as 'sur) flex_ast
+   -> (exp, 'dep, 'sur) flex_ast
 
    | Seq:
    'dep exp_t list
@@ -153,10 +208,10 @@ and ('ty, 'd, 's) flex_ast =
    ('dep id_t list) * 'dep exp_t
    -> (exp, 'dep, <lambda: yes; seq: no; bind_only: yes; ..> as 'sur) flex_ast
    | LamPat:
-   ('dep pat_t list) * 'dep exp_t
+   ('dep pat_complex_t list) * 'dep exp_t
    -> (exp, 'dep, <lambda: yes; seq: no; bind_only: no; ..> as 'sur) flex_ast
    | LamPatSeq:
-   ('dep pat_t list) * 'dep exp_t list
+   ('dep pat_complex_t list) * 'dep exp_t list
    -> (exp, 'dep, <lambda: yes; seq: yes; bind_only: no; ..> as 'sur) flex_ast
 
    | App: 
@@ -175,11 +230,8 @@ and ('ty, 'd, 's) flex_ast =
    'dep id_t * 'dep exp_t
    -> (exp, 'dep, <bind_only: yes; letin: no; ..> as 'sur) flex_ast
    | BindMatch:
-   'dep pat_t * 'dep exp_t
+   'dep pat_complex_t * 'dep exp_t
    -> (exp, 'dep, <bind_only: no; ..> as 'sur) flex_ast
-
-   | UnPin: 'dep id_t
-   -> (exp, 'dep, <unique_id: no; ..> as 'sur) flex_ast
 
    | ConcreteCaseMatch: 
    (* exp to match *)
@@ -204,7 +256,6 @@ type top = <
    pattern: yes;
    lambda: yes;
    call: yes;
-   recbind: yes; 
    unique_id: no;
    bind_only: no;
    letin: no>
@@ -214,7 +265,6 @@ type btm = <
    pattern: no;
    lambda: no;
    call: no;
-   recbind: no;
    unique_id: yes;
    bind_only: yes;
    letin: no>
@@ -225,13 +275,17 @@ let ast_compare
    (type ty src dst)
    (lhs: (ty, src, dst) flex_ast)
    (rhs: (ty, src, dst) flex_ast)
-   = compare lhs rhs
+   = poly_compare lhs rhs
 
 let shallow_map
    (type ty src dst)
-   (f: (src, dst) desugarer)
+   (f_wrap: (src, dst) desugarer)
    (e: (ty, src, dst) flex_ast)
    : (ty, dst) gen_ast =
+
+   let f: 't. ('t, src) gen_ast -> ('t, dst) gen_ast = f_wrap.f in
+   let f_list: 't. ('t, src) gen_ast list -> ('t, dst) gen_ast list = List.map ~f:f in
+
    match e with 
 
    (* identifier *)
@@ -240,51 +294,123 @@ let shallow_map
    | Gensym(i) -> Gensym(i)
 
    (* updatable pattern *)
-   | Bind(id) -> Bind(f.f id)
+   | Bind(id) -> Bind(f id)
    | Lens(obj, _method, args) -> 
-      Lens(f.f obj, f.f _method, List.map f.f args)
+      Lens(f obj, f _method, f_list args )
+
    (* pattern *)
-   | Union(alts) -> Union(List.map f.f alts)
-   | Updatable(u) -> Updatable(f.f u)
-   | Pin(id) -> Pin(f.f id)
-   | PatTuple(ps) -> PatTuple(List.map f.f ps)
-   | PatList(ps) -> PatList(List.map f.f ps)
+   | Union(alts) -> Union(f_list alts)
+   | Updatable(u) -> Updatable(f u)
+   | Pin(id) -> Pin(f id)
+   | PatTuple(ps) -> PatTuple(f_list ps)
+   | PatList(ps) -> PatList(f_list ps)
    | PLit(a) -> PLit(a)
    | PAny() -> PAny()
 
+   (* pattern complex *)
+   | PatComplex(p, ps) -> PatComplex(f p, f_list ps)
+
    (* expression *)
-   | Val(v) -> Val(f.f v)
+   | Val(v) -> Val(f v)
    | Lit(a) -> Lit(a)
-   | Binary(op, lhs, rhs) -> Binary(op, f.f lhs, f.f rhs)
-   | Unary(g, x) -> Unary(g, f.f x)
-   | Fix(e) -> Fix(f.f e)
-   | Seq(es) -> Seq(List.map f.f es)
-   | If(test, _then, _else) -> If(f.f test, f.f _then, f.f _else)
-   | IfSeq(test, _then, _else) -> IfSeq(f.f test, List.map f.f _then, List.map f.f _else)
-   | Tuple(es) -> Tuple(List.map f.f es)
-   | KthTuple(e, k) -> KthTuple(f.f e, k) 
-   | List(es) -> List(List.map f.f es)
-   | Abs(id, e) -> Abs(f.f id, f.f e)
-   | Lam(ids, e) -> Lam(List.map f.f ids, f.f e)
-   | LamPat(pats, e) -> LamPat(List.map f.f pats, f.f e)
-   | LamPatSeq(pats, es) -> LamPatSeq(List.map f.f pats, List.map f.f es)
-   | App(g, x) -> App(f.f g, f.f x)
-   | Call(id, es) -> Call(f.f id, List.map f.f es)
-   | BindMatch(lhs, rhs) -> BindMatch(f.f lhs, f.f rhs)
-   | UnPin(id) -> UnPin(f.f id)
+   | Binary(op, lhs, rhs) -> Binary(op, f lhs, f rhs)
+   | Unary(g, x) -> Unary(g, f x)
+   | Fix(e) -> Fix(f e)
+   | Seq(es) -> Seq(f_list es)
+   | If(test, _then, _else) -> If(f test, f _then, f _else)
+   | IfSeq(test, _then, _else) -> IfSeq(f test, f_list _then, f_list _else)
+   | Tuple(es) -> Tuple(f_list es)
+   | KthTuple(e, k) -> KthTuple(f e, k) 
+   | List(es) -> List(f_list es)
+   | Abs(id, e) -> Abs(f id, f e)
+   | Lam(ids, e) -> Lam(f_list ids, f e)
+   | LamPat(pats, e) -> LamPat(f_list pats, f e)
+   | LamPatSeq(pats, es) -> LamPatSeq(f_list pats, f_list es)
+   | App(g, x) -> App(f g, f x)
+   | Call(id, es) -> Call(f id, f_list es)
+   | BindMatch(lhs_patc, rhs) -> BindMatch(f lhs_patc, f rhs)
    | ConcreteCaseMatch(e, branches, _else) ->
-      let f_branch (_val, guard, ret) = (_val, f.f guard, f.f ret) in 
+      let f_branch (_val, guard, ret) = (_val, f guard, f ret) in 
       begin match _else with
-         | Some(has_else) -> ConcreteCaseMatch(f.f e, List.map f_branch branches, Some(f.f has_else))
-         | _ -> ConcreteCaseMatch(f.f e, List.map f_branch branches, None)
+         | Some(has_else) -> ConcreteCaseMatch(f e, List.map ~f:f_branch branches, Some(f has_else))
+         | _ -> ConcreteCaseMatch(f e, List.map ~f:f_branch branches, None)
       end
    | CaseMatch(e, branches) ->
-      let f_branch (pat, guard, ret) = (f.f pat, f.f guard, f.f ret) in
-      CaseMatch(f.f e, List.map f_branch branches)
+      let f_branch (pat, guard, ret) = (f pat, f guard, f ret) in
+      CaseMatch(f e, List.map ~f:f_branch branches)
    | CaseMatchSeq(e, branches) ->
-      let f_branch (pat, guard, ret) = (f.f pat, f.f guard, List.map f.f ret) in
-      CaseMatchSeq(f.f e, List.map f_branch branches)
-   | LetIn(id, _val, inner) -> LetIn(f.f id, f.f _val, f.f inner)
-   | BindOnly(id, e) -> BindOnly(f.f id, f.f e)
-   | Assert(e) -> Assert(f.f e)
-   | With(pat, e) -> With(f.f pat, f.f e)
+      let f_branch (pat, guard, ret) = (f pat, f guard, f_list ret) in
+      CaseMatchSeq(f e, List.map ~f:f_branch branches)
+   | LetIn(id, _val, inner) -> LetIn(f id, f _val, f inner)
+   | BindOnly(id, e) -> BindOnly(f id, f e)
+   | Assert(e) -> Assert(f e)
+   | With(pat, e) -> With(f pat, f e)
+
+type formatter = { f: 't. ('t, top) gen_ast -> string; }
+
+let shallow_format
+   (type ty)
+   (f_wrap: formatter)
+   (t: (ty, top) gen_ast)
+   : string =
+   let f: 't. ('t, top) gen_ast -> string = f_wrap.f in
+   let f_list: 't. ('t, top) gen_ast list -> (string list -> string) -> string = 
+      fun l agg -> List.map ~f:f l |> agg
+   in
+   match t with 
+
+   (* identifier *)
+   | Concrete id -> id
+   | Gensym(i) -> sprintf "~~%d" i
+
+   (* updatable pattern *)
+   | Bind(id) -> f id
+   | Lens(obj, _method, args) -> 
+         sprintf "%s.%s(%s)" (f obj) (f _method) (f_list args (String.concat ~sep:","))
+
+   (* pattern *)
+   | Union(alts) -> f_list alts (String.concat ~sep:"|")
+   | Updatable(u) -> f u
+   | Pin(id) -> "^" ^ f id
+   | PatTuple(ps) -> sprintf "(%s)" (f_list ps (String.concat ~sep:","))
+   | PatList(ps) -> sprintf "[%s]" (f_list ps (String.concat ~sep:","))
+   | PLit(a) -> string_of_atom a
+   | PAny() -> "_"
+
+   (* pattern complex *)
+   | PatComplex(p, []) -> f p
+   | PatComplex(p, ps) -> sprintf "%s=%s" (f p) (f_list ps (String.concat ~sep:"="))
+
+   (* expression *)
+   | Val(v) -> f v
+   | Lit(a) -> string_of_atom a
+   | Binary(op, lhs, rhs) -> sprintf "(%s %s %s)" (f lhs) (string_of_bin_op op) (f rhs)
+   | Unary(g, x) -> sprintf "(%s %s)" (string_of_un_op g) (f x)
+   | Fix(e) -> sprintf "fix(%s)" (f e)
+   | Seq(es) -> sprintf "(%s)" (f_list es (String.concat ~sep:";"))
+   | IfSeq(test, _then, _else) -> 
+         sprintf 
+         "if %s: %s else: %s"
+         (f test)
+         (f_list _then (String.concat ~sep:";"))
+         (f_list _else (String.concat ~sep:";"))
+   | Tuple(es) ->
+         sprintf "(%s)" (f_list es (String.concat ~sep:","))
+   | KthTuple _ -> "TODO"
+   | List(es) -> 
+         sprintf "[%s]" (f_list es (String.concat ~sep:","))
+   | LamPatSeq(pats, es) -> 
+         sprintf "fn(%s): %s"
+         (f_list pats (String.concat ~sep:","))
+         (f_list es (String.concat ~sep:";"))
+   | Call(id, es) -> 
+      sprintf "%s(%s)"
+      (f id)
+      (f_list es (String.concat ~sep:","))
+   | BindMatch(lhs_patc, rhs) -> sprintf "%s=%s" (f lhs_patc) (f rhs)
+   | CaseMatchSeq _ -> "TODO"
+   | Assert _ -> "TODO"
+   | With _ -> "TODO"
+
+let rec ast_format: 't. ('t, 'top) gen_ast -> string = fun e ->
+   shallow_format {f = ast_format} e
