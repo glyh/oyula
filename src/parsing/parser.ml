@@ -50,6 +50,7 @@ let tok_nl_plus = many1 tok_nl
 let bin op lhs rhs = Binary(op, lhs, rhs)
 
 let operator (type a) (tok: a t): a t = (token tok) <* tok_nl_star 
+let roperator (type a) (tok: a t): a t =  tok_nl_star *> (token tok)
 
 let op_as = operator (string "::") *> return (bin AS)
 
@@ -71,9 +72,9 @@ let op_and = operator (string "and") *> return (bin AND)
 let op_or = operator (string "or") *> return (bin OR)
 
 let op_lpar = operator (char '(')
-let tok_rpar = token (char ')')
+let rop_rpar = token (char ')')
 let op_lbkt = operator (char '[')
-let tok_rbkt = token (char ']')
+let rop_rbkt = token (char ']')
 let op_comma = operator (char ',')
 let tok_underscore = token (char '_')
 
@@ -87,6 +88,7 @@ let tok_else = token (string "else")
 let tok_end = token (string "end")
 let tok_colon = token (char ':')
 let tok_do = token (string "do")
+let tok_fn = token (string "fn")
 
 let tok_id = 
   let id1 = satisfy (fun c -> Char.is_alpha c || List.mem ['_'] ~equal: equal_char c) in
@@ -136,12 +138,15 @@ let _block_alt (type a b) (expression: top exp_t t) (block_terminator_exp: a t) 
   (tok_colon *> expression >>| (fun x -> [x])<* block_terminator_exp)
   <|> (tok_nl_plus *> (many_till (expression <* tok_nl_plus) block_terminator_blk))
 
+let id_to_lhs (id: top id_t): top pat_t =
+  Updatable(Bind(id))
+
 let _expression (pattern: top pat_t t): top exp_t t =
   fix (fun expression -> 
-    let arg_list = wrapped_list op_lpar tok_rpar op_comma expression in
+    let arg_list = wrapped_list op_lpar rop_rpar op_comma expression in
     let function_call = lift2 (fun fn args -> (fn, args)) identifier arg_list in
     let primary =
-      op_lpar *> expression <* tok_rpar
+      op_lpar *> expression <* rop_rpar
       <|> (function_call >>| fun (fn, args) -> Call(fn, args))
       <|> (atom >>| fun a -> Lit a)
       <|> (identifier >>| fun id -> Val id)
@@ -174,14 +179,24 @@ let _expression (pattern: top pat_t t): top exp_t t =
       (fun _ exps -> Seq(exps))
       tok_do
       (block tok_end)
+    in let params_list = wrapped_list op_lpar rop_rpar op_comma pattern
+    in let lambda = 
+      lift4 (fun _ id params blk -> 
+        match id with
+        | Some(id) -> BindMatch(Updatable(Bind(id)), LamPatSeq(params, blk))
+        | None -> LamPatSeq(params, blk)
+      )
+      tok_fn
+      (option None (identifier >>| fun x -> Some(x)))
+      params_list
+      (block tok_end)
     in
-
-    do_stmt <|> if_stmt <|> expr_like)
+    do_stmt <|> if_stmt <|> lambda <|> expr_like)
 
 let _updatable_pattern (pattern: top pat_t t): top upd_pat_t t =
   let expression = _expression pattern in
 
-  let arg_list = wrapped_list op_lpar tok_rpar op_comma expression in
+  let arg_list = wrapped_list op_lpar rop_rpar op_comma expression in
   let bind = identifier >>| fun b -> Bind b in
   let upd_primary = bind in
   let rec go_lens acc = 
@@ -203,8 +218,8 @@ let pattern: top pat_t t =
     let plit = atom >>| fun a -> PLit a in
     let pany = tok_underscore *> (return (PAny ())) in
     let pupdatable = updatable_pattern >>| fun up -> Updatable up in
-    let plist = wrapped_list op_lbkt tok_rbkt op_comma pattern >>| fun ps -> PatList ps in
-    let pnest_or_tuple = wrapped_list op_lpar tok_rpar op_comma pattern >>| function
+    let plist = wrapped_list op_lbkt rop_rbkt op_comma pattern >>| fun ps -> PatList ps in
+    let pnest_or_tuple = wrapped_list op_lpar rop_rpar op_comma pattern >>| function
       | [x] -> x
       | ps -> PatTuple ps
     in
@@ -281,5 +296,10 @@ let%test_module "parsing" = (module struct
   let%test "do block" =
     let to_parse = "do\n 1 \n 2\n 3\n end" in
     let expected = Seq([Lit(Int 1); Lit(Int 2); Lit(Int 3)]) in
+    ast_expect expression to_parse expected
+
+  let%test "lambda" =
+    let to_parse = "fn f(x): x + 1" in
+    let expected = BindMatch(Updatable(Bind(Concrete("f"))), LamPatSeq([Updatable(Bind(Concrete "x"))], [Binary(ADD, Val(Concrete "x"), Lit(Int 1))])) in
     ast_expect expression to_parse expected
 end) 
