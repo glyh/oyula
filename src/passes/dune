@@ -1,7 +1,6 @@
 (library
- (name oyula_parsing)
- (libraries
-   angstrom
+ (name oyula_desugar_passes)
+ (libraries oyula_lib
    core)
 
  (preprocess (pps ppx_inline_test))

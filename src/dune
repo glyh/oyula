@@ -1,0 +1,8 @@
+(library
+ (name oyula_lib)
+ (libraries
+   angstrom
+   core)
+
+ (preprocess (pps ppx_inline_test))
+ (inline_tests))
