@@ -85,6 +85,8 @@ type pat = PAT
 type pat_complex = PAT_COMPLEX
 type id = ID
 
+type scope_state = Scopeful | Scopeless
+
 type 'a exp_t = (exp, 'a) gen_ast
 and 'a upd_pat_t = (upd_pat, 'a) gen_ast
 and 'a pat_t = (pat, 'a) gen_ast
@@ -178,7 +180,7 @@ and ('ty, 'd, 's) flex_ast =
    -> (exp, 'dep, 'sur) flex_ast
 
    | Seq:
-   'dep exp_t list
+   scope_state * 'dep exp_t list
    -> (exp, 'dep, 'sur) flex_ast
 
    | If:
@@ -316,7 +318,7 @@ let shallow_map
    | Binary(op, lhs, rhs) -> Binary(op, f lhs, f rhs)
    | Unary(g, x) -> Unary(g, f x)
    | Fix(e) -> Fix(f e)
-   | Seq(es) -> Seq(f_list es)
+   | Seq(st, es) -> Seq(st, f_list es)
    | If(test, _then, _else) -> If(f test, f _then, f _else)
    | IfSeq(test, _then, _else) -> IfSeq(f test, f_list _then, f_list _else)
    | Tuple(es) -> Tuple(f_list es)
@@ -387,7 +389,8 @@ let shallow_format
    | Binary(op, lhs, rhs) -> sprintf "(%s %s %s)" (f lhs) (string_of_bin_op op) (f rhs)
    | Unary(g, x) -> sprintf "(%s %s)" (string_of_un_op g) (f x)
    | Fix(e) -> sprintf "fix(%s)" (f e)
-   | Seq(es) -> sprintf "(%s)" (f_list es (String.concat ~sep:";"))
+   | Seq(Scopeful, es) -> sprintf "(#%s)" (f_list es (String.concat ~sep:";"))
+   | Seq(Scopeless, es) -> sprintf "(%s)" (f_list es (String.concat ~sep:";"))
    | IfSeq(test, _then, _else) -> 
          sprintf 
          "if %s: %s else: %s"

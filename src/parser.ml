@@ -158,7 +158,7 @@ let if_stmt (expression: top exp_t t): top exp_t t =
 let do_stmt (expression: top exp_t t): top exp_t t =
   let block (type a) (term: a t) = _block expression term in
     lift2
-    (fun _ exps -> Seq(exps))
+    (fun _ exps -> Seq(Scopeful, exps))
     tok_do
     (block tok_end)
 
@@ -208,7 +208,7 @@ let _expression (pattern_complex: top pat_complex_t t) (pattern: top pat_t t): t
       (fun head rest -> 
         match rest with
         | [] -> head
-        | rest -> Seq(head :: rest))
+        | rest -> Seq(Scopeless, head :: rest))
       pred_disjunct
       (many (op_semicol *> pred_disjunct)) in 
     let expr_like = seq_exp in
@@ -278,11 +278,12 @@ let p_wrap (type a) (p: a t): a t = (white_space *> tok_nl_star *> p <* tok_nl_s
 let%test_module "parsing" = (module struct
   let ast_expect (type ty) (p: (ty, top) gen_ast t) normalized to_normalize =
     match parse_string ~consume:All (p_wrap p) to_normalize with
-    | Ok v -> 
-        let expect_normalized = ast_format v in
-        (*print_endline expect_normalized;*)
+    | Ok parsed ->
+        let expect_normalized = ast_format parsed in
+        (*printf "%s ?= %s\n" expect_normalized normalized; *)
         equal_string expect_normalized normalized
-    | _ -> false
+    | Error msg ->
+        failwith msg
 
   let%test "ufcs and calls" =
     let to_parse = "g(1.add(3).mul(4).fn(9, 10),100)" in
@@ -322,14 +323,15 @@ let%test_module "parsing" = (module struct
     let expected = "if True: 1 else: 2" in
     List.for_all to_parses ~f:(ast_expect expression expected)
 
-  let%test "sequences" =
-    let to_parses = 
-      [ "do\n 1 \n 2\n 3\n end"
-      ; "1; 2; 3"
-      ] in
-    let expected = "(1;2;3)" in
-    List.for_all to_parses ~f:(ast_expect expression expected)
+  let%test "scopeful block" =
+    let to_parse = "do\n 1 \n 2\n 3\n end" in
+    let expected = "(#1;2;3)" in
+    ast_expect expression expected to_parse
 
+  let%test "scopeless sequence" =
+    let to_parse = "1; 2; 3" in
+    let expected = "(1;2;3)" in
+    ast_expect expression expected to_parse
 
   let%test "simple lambdas" =
     let to_parses = 
