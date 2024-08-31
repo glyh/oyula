@@ -25,8 +25,8 @@ let rec deseq: type ty. (ty, src) gen_ast -> (ty, dst) gen_ast = fun tree ->
               | BindOnly(lhs, rhs) -> LetIn(deseq lhs, deseq rhs, acc)
               | _ -> LetIn(Concrete "_", deseq ele, acc))
      end
-   | BindOnly _ ->
-      raise Unreachable (* Shouldn't be reaching a bind inside no scope *)
+   | BindOnly (_, rhs) ->
+      deseq rhs (* just return rhs as we're in no scope *)
 
    | Concrete _ as e -> sha_deseq e
    | Gensym _ as e -> sha_deseq e
