@@ -38,6 +38,7 @@ type atom =
    | Str of string
    | Keyword of string
    | Bool of bool
+   | Unit
    (* TODO: dependent types
    | Type of Type.ty *)
 
@@ -62,6 +63,7 @@ let string_of_atom (a: atom) =
    | Keyword k -> ":" ^ k
    | Bool true -> "True"
    | Bool false -> "False"
+   | Unit -> "()"
 
 type ty = 
    | TInt
@@ -98,8 +100,7 @@ and ('ty, 'a) gen_ast = ('ty, 'a, 'a) flex_ast
 and ('ty, 'd, 's) flex_ast = 
 
    (* Identifiers *)
-   | Concrete: string -> (id, 'dep, <unique_id: no; ..> as 'sur) flex_ast 
-   | Unique: string * int -> (id, 'dep, <unique_id: yes; ..> as 'sur) flex_ast 
+   | Concrete: string -> (id, 'dep, 'sur) flex_ast 
    | Gensym: int -> (id, 'dep, 'sur) flex_ast 
 
    (* Updatable Patterns *)
@@ -179,16 +180,17 @@ and ('ty, 'd, 's) flex_ast =
    'dep exp_t
    -> (exp, 'dep, 'sur) flex_ast
 
+   | SeqScope:
+   'dep exp_t list
+   -> (exp, 'dep, <letin: no; scoped_seq: yes; ..> as 'sur) flex_ast
+
    | Seq:
    scope_state * 'dep exp_t list
-   -> (exp, 'dep, 'sur) flex_ast
+   -> (exp, 'dep, <letin: no; scoped_seq: no; ..> as 'sur) flex_ast
 
    | If:
    'dep exp_t * 'dep exp_t * 'dep exp_t
-   -> (exp, 'dep, <seq: no; .. > as 'sur) flex_ast
-   | IfSeq:
-   'dep exp_t * 'dep exp_t list * 'dep exp_t list
-   -> (exp, 'dep, <seq: yes; ..> as 'sur) flex_ast
+   -> (exp, 'dep, 'sur) flex_ast
 
    | Tuple: 
    'dep exp_t list
@@ -204,36 +206,37 @@ and ('ty, 'd, 's) flex_ast =
 
    | Abs:
    'dep id_t * 'dep exp_t
-   -> (exp, 'dep, <lambda: no; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <currying: yes; ..> as 'sur) flex_ast
+
+   | AbsU: (* arg being of unit type *)
+   'dep exp_t
+   -> (exp, 'dep, <currying: yes; ..> as 'sur) flex_ast
 
    | Lam:
    ('dep id_t list) * 'dep exp_t
-   -> (exp, 'dep, <lambda: yes; seq: no; bind_only: yes; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <currying: no; pattern: no; ..> as 'sur) flex_ast
    | LamPat:
    ('dep pat_complex_t list) * 'dep exp_t
-   -> (exp, 'dep, <lambda: yes; seq: no; bind_only: no; ..> as 'sur) flex_ast
-   | LamPatSeq:
-   ('dep pat_complex_t list) * 'dep exp_t list
-   -> (exp, 'dep, <lambda: yes; seq: yes; bind_only: no; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <currying: no; pattern: yes; ..> as 'sur) flex_ast
 
    | App: 
    'dep exp_t * 'dep exp_t 
-   -> (exp, 'dep, <call: no; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <currying: yes; ..> as 'sur) flex_ast
 
    | Call: 
    'dep id_t * 'dep exp_t list
-   -> (exp, 'dep, <call: yes; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <currying: no; ..> as 'sur) flex_ast
 
    | LetIn: (* we may need fix to create mutual recursive bindings here so a let may have more than one output *)
    'dep id_t * 'dep exp_t * 'dep exp_t 
-   -> (exp, 'dep, <bind_only: yes; letin: yes; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <pattern: no; letin: yes; ..> as 'sur) flex_ast
 
    | BindOnly: 
    'dep id_t * 'dep exp_t
-   -> (exp, 'dep, <bind_only: yes; letin: no; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <pattern: no; letin: no; ..> as 'sur) flex_ast
    | BindMatch:
    'dep pat_complex_t * 'dep exp_t
-   -> (exp, 'dep, <bind_only: no; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <pattern: yes; ..> as 'sur) flex_ast
 
    | ConcreteCaseMatch: 
    (* exp to match *)
@@ -241,34 +244,23 @@ and ('ty, 'd, 's) flex_ast =
    (* pat  guard                 ret *)
    (atom * 'dep exp_t * 'dep exp_t) list *
    'dep exp_t option ->
-   (exp, 'dep, <pattern: no; seq: no; ..> as 'sur) flex_ast
+   (exp, 'dep, <pattern: no; ..> as 'sur) flex_ast
 
    | CaseMatch: 
    'dep exp_t *
    ('dep pat_t * 'dep exp_t * 'dep exp_t) list ->
-   (exp, 'dep, <pattern: yes; seq: no; ..> as 'sur) flex_ast
-
-   | CaseMatchSeq:
-   'dep exp_t *
-   ('dep pat_t * 'dep exp_t * 'dep exp_t list) list ->
-   (exp, 'dep, <pattern: yes; seq: yes; ..> as 'sur) flex_ast
+   (exp, 'dep, <pattern: yes; ..> as 'sur) flex_ast
 
 type top = <
-   seq: yes;
    pattern: yes;
-   lambda: yes;
-   call: yes;
-   unique_id: no;
-   bind_only: no;
+   currying: no;
+   scoped_seq: no;
    letin: no>
 
 type btm = <
-   seq: no;
    pattern: no;
-   lambda: no;
-   call: no;
-   unique_id: yes;
-   bind_only: yes;
+   currying: yes;
+   scoped_seq: yes;
    letin: no>
 
 type ('src, 'dst) desugarer = { f: 't. ('t, 'src) gen_ast -> ('t, 'dst) gen_ast }
@@ -292,7 +284,6 @@ let shallow_map
 
    (* identifier *)
    | Concrete(id) -> Concrete(id)
-   | Unique(id, i) -> Unique(id, i)
    | Gensym(i) -> Gensym(i)
 
    (* updatable pattern *)
@@ -320,14 +311,13 @@ let shallow_map
    | Fix(e) -> Fix(f e)
    | Seq(st, es) -> Seq(st, f_list es)
    | If(test, _then, _else) -> If(f test, f _then, f _else)
-   | IfSeq(test, _then, _else) -> IfSeq(f test, f_list _then, f_list _else)
    | Tuple(es) -> Tuple(f_list es)
    | KthTuple(e, k) -> KthTuple(f e, k) 
    | List(es) -> List(f_list es)
    | Abs(id, e) -> Abs(f id, f e)
+   | AbsU(e) -> AbsU(f e)
    | Lam(ids, e) -> Lam(f_list ids, f e)
    | LamPat(pats, e) -> LamPat(f_list pats, f e)
-   | LamPatSeq(pats, es) -> LamPatSeq(f_list pats, f_list es)
    | App(g, x) -> App(f g, f x)
    | Call(id, es) -> Call(f id, f_list es)
    | BindMatch(lhs_patc, rhs) -> BindMatch(f lhs_patc, f rhs)
@@ -340,13 +330,11 @@ let shallow_map
    | CaseMatch(e, branches) ->
       let f_branch (pat, guard, ret) = (f pat, f guard, f ret) in
       CaseMatch(f e, List.map ~f:f_branch branches)
-   | CaseMatchSeq(e, branches) ->
-      let f_branch (pat, guard, ret) = (f pat, f guard, f_list ret) in
-      CaseMatchSeq(f e, List.map ~f:f_branch branches)
    | LetIn(id, _val, inner) -> LetIn(f id, f _val, f inner)
    | BindOnly(id, e) -> BindOnly(f id, f e)
    | Assert(e) -> Assert(f e)
    | With(pat, e) -> With(f pat, f e)
+   | SeqScope(es) -> SeqScope(f_list es)
 
 type formatter = { f: 't. ('t, top) gen_ast -> string; }
 
@@ -391,27 +379,27 @@ let shallow_format
    | Fix(e) -> sprintf "fix(%s)" (f e)
    | Seq(Scopeful, es) -> sprintf "(#%s)" (f_list es (String.concat ~sep:";"))
    | Seq(Scopeless, es) -> sprintf "(%s)" (f_list es (String.concat ~sep:";"))
-   | IfSeq(test, _then, _else) -> 
+   | If(test, _then, _else) -> 
          sprintf 
          "if %s: %s else: %s"
          (f test)
-         (f_list _then (String.concat ~sep:";"))
-         (f_list _else (String.concat ~sep:";"))
+         (f _then)
+         (f _else)
    | Tuple(es) ->
          sprintf "(%s)" (f_list es (String.concat ~sep:","))
    | KthTuple _ -> "TODO"
    | List(es) -> 
          sprintf "[%s]" (f_list es (String.concat ~sep:","))
-   | LamPatSeq(pats, es) -> 
+   | LamPat(pats, body) -> 
          sprintf "fn(%s): %s"
          (f_list pats (String.concat ~sep:","))
-         (f_list es (String.concat ~sep:";"))
+         (f body)
    | Call(id, es) -> 
       sprintf "%s(%s)"
       (f id)
       (f_list es (String.concat ~sep:","))
    | BindMatch(lhs_patc, rhs) -> sprintf "%s=%s" (f lhs_patc) (f rhs)
-   | CaseMatchSeq _ -> "TODO"
+   | CaseMatch _ -> "TODO"
    | Assert _ -> "TODO"
    | With _ -> "TODO"
 

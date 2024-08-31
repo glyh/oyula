@@ -1,5 +1,3 @@
-(* TODO: use `Fix` *)
-
 open Core
 open Angstrom
 open Ast
@@ -44,6 +42,7 @@ let token (tok: 'a t): 'a t =
 let atom_int = token (take_while1 (function '0' .. '9' -> true | _ -> false) >>| int_of_string)
 let atom_true = token (string "True") *> (return true)
 let atom_false = token (string "False") *> (return false)
+let atom_unit = token (string "()") *> (return Unit)
 
 let tok_nl = token (char '\n')
 let tok_nl_star = many tok_nl
@@ -130,6 +129,7 @@ let sep_list sep (p: 'a t): 'a list t =
 let atom: atom t =
   atom_int >>= (fun i -> return (Int i))
   <|> ((atom_true <|> atom_false) >>= (fun b -> return (Bool b)))
+  <|> atom_unit
 
 let identifier: top id_t t =
   tok_id >>| fun id -> Concrete id
@@ -149,7 +149,7 @@ let if_stmt (expression: top exp_t t): top exp_t t =
   let block_alt (type a b) (term_exp: a t) (term_blk: b t) = _block_alt expression term_exp term_blk in
   let block (type a) (term: a t) = _block expression term in
     lift4
-      (fun _ cond then_clause else_clause -> IfSeq(cond, then_clause, else_clause)) 
+      (fun _ cond then_clause else_clause -> If(cond, Seq(Scopeful, then_clause), Seq(Scopeful, else_clause))) 
       tok_if
       expression
       (block_alt tok_else tok_else)
@@ -167,8 +167,8 @@ let lambda (pattern_complex: top pat_complex_t t) (expression: top exp_t t): top
   let params_list = wrapped_list op_lpar rop_rpar op_comma pattern_complex in
     lift4 (fun _ id params blk -> 
       match id with
-      | Some(id) -> BindMatch(PatComplex(Updatable(Bind(id)), []), LamPatSeq(params, blk))
-      | None -> LamPatSeq(params, blk)
+      | Some(id) -> BindMatch(PatComplex(Updatable(Bind(id)), []), LamPat(params, Seq(Scopeful, blk)))
+      | None -> LamPat(params, Seq(Scopeful, blk))
     )
     tok_fn
     (option None (identifier >>| fun x -> Some(x)))
@@ -179,7 +179,7 @@ let match_stmt (pattern: top pat_t t) (expression: top exp_t t): top exp_t t =
   lift4 (fun is_rec p ps rhs -> 
     let pc = PatComplex(p, ps) in
     if is_rec then
-      BindMatch(pc, Call(Concrete("fix"), [LamPatSeq([pc], [rhs])]))
+      BindMatch(pc, Fix(LamPat([pc], rhs)))
     else 
       BindMatch(pc, rhs))
     (option false (tok_rec *> return true))
@@ -280,7 +280,7 @@ let%test_module "parsing" = (module struct
     match parse_string ~consume:All (p_wrap p) to_normalize with
     | Ok parsed ->
         let expect_normalized = ast_format parsed in
-        (*printf "%s ?= %s\n" expect_normalized normalized; *)
+        printf "%s ?= %s\n" expect_normalized normalized; 
         equal_string expect_normalized normalized
     | Error msg ->
         failwith msg
@@ -305,7 +305,7 @@ let%test_module "parsing" = (module struct
         end
       end
     |} in
-    let expected = "fib=fix(fn(fib): fn(x): if (x < 1): 1 else: (fib((x - 1)) + fib((x - 2))))" in
+    let expected = "fib=fix(fn(fib): fn(x): (#if (x < 1): (#1) else: (#(fib((x - 1)) + fib((x - 2))))))" in
     ast_expect expression expected to_parse
 
   let%test "simple pattern" =
@@ -320,7 +320,7 @@ let%test_module "parsing" = (module struct
       ; "if True \n 1 \n else:2" 
       ; "if True \n 1 \n else  \n 2 \n end" 
       ] in
-    let expected = "if True: 1 else: 2" in
+    let expected = "if True: (#1) else: (#2)" in
     List.for_all to_parses ~f:(ast_expect expression expected)
 
   let%test "scopeful block" =
@@ -338,7 +338,7 @@ let%test_module "parsing" = (module struct
       [ "fn f(x)\nx+1\nend"
       ; "fn f(x): x + 1" 
       ] in
-    let expected = "f=fn(x): (x + 1)" in
+    let expected = "f=fn(x): (#(x + 1))" in
     List.for_all to_parses ~f:(ast_expect expression expected)
 
 end) 
