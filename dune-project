@@ -24,7 +24,9 @@
    dune
    (angstrom (>= 0.16.0))
    (core (>= 0.16.2))
-   (ppx_inline_test (>= 0.14.1)))
+   (ppx_inline_test (>= 0.14.1))
+   (ppx_deriving (>= 6.0.2))
+   (ppx_sexp_conv (>= 0.16.0)))
  (tags
   (topics compiler)))
 
