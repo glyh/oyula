@@ -2,6 +2,8 @@ let poly_compare = compare
 
 open Core
 
+exception Unimplemented
+
 type un_op = 
      NOT
 
@@ -95,62 +97,70 @@ and 'a pat_t = (pat, 'a) gen_ast
 and 'a pat_complex_t = (pat_complex, 'a) gen_ast
 and 'a id_t = (id, 'a) gen_ast
 and ('ty, 'a) gen_ast = ('ty, 'a, 'a) flex_ast
+and ('ty, 'a) naked_gen_ast = ('ty, 'a, 'a) naked_flex_ast
+and ('ty, 'd, 's) flex_ast = ('ty, 'd, 's) naked_flex_ast * 'ty annotation
+and 'ty annotation =
+   | AnnExpression: {_type: ty option} -> exp annotation
+   | AnnUpdPattern: {_type: ty option} -> upd_pat annotation
+   | AnnPattern: {_type: ty option} -> pat annotation
+   | AnnPatComplex: {_type: ty option} -> pat_complex annotation
+   | AnnId: {_type: ty option} -> id annotation
 
 (* 'd means underlaying structure, while 's means surface structure *)
-and ('ty, 'd, 's) flex_ast = 
+and ('ty, 'd, 's) naked_flex_ast = 
 
    (* Identifiers *)
-   | Concrete: string -> (id, 'dep, 'sur) flex_ast 
-   | Gensym: int -> (id, 'dep, 'sur) flex_ast 
+   | Concrete: string -> (id, 'dep, 'sur) naked_flex_ast 
+   | Gensym: int -> (id, 'dep, 'sur) naked_flex_ast 
 
    (* Updatable Patterns *)
    | Bind: 'dep id_t
-   -> (upd_pat, 'dep, <pattern: yes; ..> as 'sur) flex_ast 
+   -> (upd_pat, 'dep, <pattern: yes; ..> as 'sur) naked_flex_ast 
    | Lens: 
    (* obj         . method      (arg1, arg2, ...) *) 
    'dep upd_pat_t * 'dep id_t * 'dep exp_t list 
-   -> (upd_pat, 'dep, <pattern: yes; ..> as 'sur) flex_ast
+   -> (upd_pat, 'dep, <pattern: yes; ..> as 'sur) naked_flex_ast
 
    (* PATTERN *)
    | Union: 
    (* rhs matches any of LHS, we should require LHS have same bindings and 
       corresponding bindings have same type *)
    'dep pat_t list 
-   -> (pat, 'dep, <pattern: yes; ..> as 'sur) flex_ast
+   -> (pat, 'dep, <pattern: yes; ..> as 'sur) naked_flex_ast
    
    | Updatable: 
    'dep upd_pat_t
-   -> (pat, 'dep, <pattern: yes; ..> as 'sur) flex_ast
+   -> (pat, 'dep, <pattern: yes; ..> as 'sur) naked_flex_ast
    
    | Pin: (* match with existing value *)
    'dep id_t
-   -> (pat, 'dep, <pattern: yes; ..> as 'sur) flex_ast
+   -> (pat, 'dep, <pattern: yes; ..> as 'sur) naked_flex_ast
 
    | PatTuple: 
    'dep pat_t list
-   -> (pat, 'dep, <pattern: yes; ..> as 'sur) flex_ast
+   -> (pat, 'dep, <pattern: yes; ..> as 'sur) naked_flex_ast
 
    | PatList: 
    'dep pat_t list
-   -> (pat, 'dep, <pattern: yes; ..> as 'sur) flex_ast
+   -> (pat, 'dep, <pattern: yes; ..> as 'sur) naked_flex_ast
 
    | PLit:
    atom
-   -> (pat, 'dep, <pattern: yes; ..> as 'sur) flex_ast
+   -> (pat, 'dep, <pattern: yes; ..> as 'sur) naked_flex_ast
 
    | PAny:
    unit
-   -> (pat, 'dep, <pattern: yes; ..> as 'sur) flex_ast
+   -> (pat, 'dep, <pattern: yes; ..> as 'sur) naked_flex_ast
 
    | With:
    'dep pat_t * 'dep exp_t 
-   -> (pat, 'dep, <pattern: yes; ..> as 'sur) flex_ast
+   -> (pat, 'dep, <pattern: yes; ..> as 'sur) naked_flex_ast
 
 
    (* Pattern Complex *)
    | PatComplex:
    'dep pat_t * 'dep pat_t list
-   -> (pat_complex, 'dep, <pattern: yes; ..> as 'sur) flex_ast
+   -> (pat_complex, 'dep, <pattern: yes; ..> as 'sur) naked_flex_ast
       
 
    (* EXPRESSION *)
@@ -158,85 +168,85 @@ and ('ty, 'd, 's) flex_ast =
    (* a temporary solution, we may add algebraic effects later *)
    | Assert:
    'dep exp_t
-   -> (exp, 'dep, 'sur) flex_ast
+   -> (exp, 'dep, 'sur) naked_flex_ast
 
    | Val: 
    'dep id_t 
-   -> (exp, 'dep, 'sur) flex_ast
+   -> (exp, 'dep, 'sur) naked_flex_ast
 
    | Lit:
    atom
-   -> (exp, 'dep, 'sur) flex_ast
+   -> (exp, 'dep, 'sur) naked_flex_ast
 
    | Binary:
    bin_op * 'dep exp_t * 'dep exp_t
-   -> (exp, 'dep, 'sur) flex_ast
+   -> (exp, 'dep, 'sur) naked_flex_ast
 
    | Unary:
    un_op * 'dep exp_t
-   -> (exp, 'dep, 'sur) flex_ast
+   -> (exp, 'dep, 'sur) naked_flex_ast
 
    | Fix:
    'dep exp_t
-   -> (exp, 'dep, 'sur) flex_ast
+   -> (exp, 'dep, 'sur) naked_flex_ast
 
    | SeqScope:
    'dep exp_t list
-   -> (exp, 'dep, <letin: no; scoped_seq: yes; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <letin: no; scoped_seq: yes; ..> as 'sur) naked_flex_ast
 
    | Seq:
    scope_state * 'dep exp_t list
-   -> (exp, 'dep, <letin: no; scoped_seq: no; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <letin: no; scoped_seq: no; ..> as 'sur) naked_flex_ast
 
    | If:
    'dep exp_t * 'dep exp_t * 'dep exp_t
-   -> (exp, 'dep, 'sur) flex_ast
+   -> (exp, 'dep, 'sur) naked_flex_ast
 
    | Tuple: 
    'dep exp_t list
-   -> (exp, 'dep, 'sur) flex_ast
+   -> (exp, 'dep, 'sur) naked_flex_ast
 
    | KthTuple: 
       'dep exp_t * int 
-   -> (exp, 'dep, 'sur) flex_ast
+   -> (exp, 'dep, 'sur) naked_flex_ast
 
    | List: 
    'dep exp_t list
-   -> (exp, 'dep, 'sur) flex_ast
+   -> (exp, 'dep, 'sur) naked_flex_ast
 
    | Abs:
    'dep id_t * 'dep exp_t
-   -> (exp, 'dep, <currying: yes; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <currying: yes; ..> as 'sur) naked_flex_ast
 
    | AbsU: (* arg being of unit type *)
    'dep exp_t
-   -> (exp, 'dep, <currying: yes; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <currying: yes; ..> as 'sur) naked_flex_ast
 
    | Lam:
    ('dep id_t list) * 'dep exp_t
-   -> (exp, 'dep, <currying: no; pattern: no; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <currying: no; pattern: no; ..> as 'sur) naked_flex_ast
    | LamPat:
    ('dep pat_complex_t list) * 'dep exp_t
-   -> (exp, 'dep, <currying: no; pattern: yes; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <currying: no; pattern: yes; ..> as 'sur) naked_flex_ast
 
    | App: 
    'dep exp_t * 'dep exp_t 
-   -> (exp, 'dep, <currying: yes; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <currying: yes; ..> as 'sur) naked_flex_ast
 
    | Call: 
    'dep id_t * 'dep exp_t list
-   -> (exp, 'dep, <currying: no; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <currying: no; ..> as 'sur) naked_flex_ast
 
    | LetIn: (* we may need fix to create mutual recursive bindings here so a let may have more than one output *)
    'dep id_t * 'dep exp_t * 'dep exp_t 
-   -> (exp, 'dep, <pattern: no; letin: yes; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <pattern: no; letin: yes; ..> as 'sur) naked_flex_ast
 
    | BindOnly: 
    'dep id_t * 'dep exp_t
-   -> (exp, 'dep, <pattern: no; letin: no; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <pattern: no; letin: no; ..> as 'sur) naked_flex_ast
    | BindMatch:
    'dep pat_complex_t * 'dep exp_t
-   -> (exp, 'dep, <pattern: yes; ..> as 'sur) flex_ast
+   -> (exp, 'dep, <pattern: yes; ..> as 'sur) naked_flex_ast
 
    | ConcreteCaseMatch: 
    (* exp to match *)
@@ -244,12 +254,20 @@ and ('ty, 'd, 's) flex_ast =
    (* pat  guard                 ret *)
    (atom * 'dep exp_t * 'dep exp_t) list *
    'dep exp_t option ->
-   (exp, 'dep, <pattern: no; ..> as 'sur) flex_ast
+   (exp, 'dep, <pattern: no; ..> as 'sur) naked_flex_ast
 
    | CaseMatch: 
    'dep exp_t *
    ('dep pat_t * 'dep exp_t * 'dep exp_t) list ->
-   (exp, 'dep, <pattern: yes; ..> as 'sur) flex_ast
+   (exp, 'dep, <pattern: yes; ..> as 'sur) naked_flex_ast
+
+(* Default Annotations *)
+let ann_exp_0 = AnnExpression {_type = None}
+let ann_upd_pat_0 = AnnUpdPattern {_type = None}
+let ann_pat_0 = AnnPattern {_type = None}
+let ann_pat_complex_0 = AnnPatComplex {_type = None}
+let ann_id_0 = AnnId {_type = None}
+
 
 type top = <
    pattern: yes;
@@ -271,11 +289,11 @@ let ast_compare
    (rhs: (ty, src, dst) flex_ast)
    = poly_compare lhs rhs
 
-let shallow_map
+let shallow_map_naked
    (type ty src dst)
    (f_wrap: (src, dst) desugarer)
-   (e: (ty, src, dst) flex_ast)
-   : (ty, dst) gen_ast =
+   (e: (ty, src, dst) naked_flex_ast)
+   : (ty, dst) naked_gen_ast =
 
    let f: 't. ('t, src) gen_ast -> ('t, dst) gen_ast = f_wrap.f in
    let f_list: 't. ('t, src) gen_ast list -> ('t, dst) gen_ast list = List.map ~f:f in
@@ -336,6 +354,14 @@ let shallow_map
    | With(pat, e) -> With(f pat, f e)
    | SeqScope(es) -> SeqScope(f_list es)
 
+let shallow_map
+   (type ty src dst)
+   (f_wrap: (src, dst) desugarer)
+   (e: (ty, src, dst) flex_ast)
+   : (ty, dst) gen_ast =
+      let (naked, ann) = e in
+      shallow_map_naked f_wrap naked, ann 
+
 type formatter = { f: 't. ('t, top) gen_ast -> string; }
 
 let shallow_format
@@ -350,58 +376,59 @@ let shallow_format
    match t with 
 
    (* identifier *)
-   | Concrete id -> id
-   | Gensym(i) -> sprintf "~~%d" i
+   | Concrete id, _ -> id
+   | Gensym i, _ -> sprintf "~~%d" i
 
    (* updatable pattern *)
-   | Bind(id) -> f id
-   | Lens(obj, _method, args) -> 
+   | Bind id, _ -> f id
+   | Lens(obj, _method, args), _ -> 
          sprintf "%s.%s(%s)" (f obj) (f _method) (f_list args (String.concat ~sep:","))
 
    (* pattern *)
-   | Union(alts) -> f_list alts (String.concat ~sep:"|")
-   | Updatable(u) -> f u
-   | Pin(id) -> "^" ^ f id
-   | PatTuple(ps) -> sprintf "(%s)" (f_list ps (String.concat ~sep:","))
-   | PatList(ps) -> sprintf "[%s]" (f_list ps (String.concat ~sep:","))
-   | PLit(a) -> string_of_atom a
-   | PAny() -> "_"
+   | Union alts, _ -> f_list alts (String.concat ~sep:"|")
+   | Updatable u, _ -> f u
+   | Pin id, _ -> "^" ^ f id
+   | PatTuple ps, _ -> sprintf "(%s)" (f_list ps (String.concat ~sep:","))
+   | PatList ps, _ -> sprintf "[%s]" (f_list ps (String.concat ~sep:","))
+   | PLit a, _ -> string_of_atom a
+   | PAny (), _ -> "_"
 
    (* pattern complex *)
-   | PatComplex(p, []) -> f p
-   | PatComplex(p, ps) -> sprintf "%s=%s" (f p) (f_list ps (String.concat ~sep:"="))
+   | PatComplex(p, []), _ -> f p
+   | PatComplex(p, ps), _ -> sprintf "%s=%s" (f p) (f_list ps (String.concat ~sep:"="))
 
    (* expression *)
-   | Val(v) -> f v
-   | Lit(a) -> string_of_atom a
-   | Binary(op, lhs, rhs) -> sprintf "(%s %s %s)" (f lhs) (string_of_bin_op op) (f rhs)
-   | Unary(g, x) -> sprintf "(%s %s)" (string_of_un_op g) (f x)
-   | Fix(e) -> sprintf "fix(%s)" (f e)
-   | Seq(Scopeful, es) -> sprintf "(#%s)" (f_list es (String.concat ~sep:";"))
-   | Seq(Scopeless, es) -> sprintf "(%s)" (f_list es (String.concat ~sep:";"))
-   | If(test, _then, _else) -> 
+   | Val(v), _ -> f v
+   | Lit(a), _ -> string_of_atom a
+   | Binary(op, lhs, rhs), _ -> sprintf "(%s %s %s)" (f lhs) (string_of_bin_op op) (f rhs)
+   | Unary(g, x), _ -> sprintf "(%s %s)" (string_of_un_op g) (f x)
+   | Fix(e), _ -> sprintf "fix(%s)" (f e)
+   | Seq(Scopeful, es), _ -> sprintf "(#%s)" (f_list es (String.concat ~sep:";"))
+   | Seq(Scopeless, es), _ -> sprintf "(%s)" (f_list es (String.concat ~sep:";"))
+   | If(test, _then, _else), _ -> 
          sprintf 
          "if %s: %s else: %s"
          (f test)
          (f _then)
          (f _else)
-   | Tuple(es) ->
+   | Tuple(es), _ ->
          sprintf "(%s)" (f_list es (String.concat ~sep:","))
-   | KthTuple _ -> "TODO"
-   | List(es) -> 
+   | KthTuple _, _ -> raise Unimplemented
+   | List(es), _ -> 
          sprintf "[%s]" (f_list es (String.concat ~sep:","))
-   | LamPat(pats, body) -> 
+   | LamPat(pats, body), _ -> 
          sprintf "fn(%s): %s"
          (f_list pats (String.concat ~sep:","))
          (f body)
-   | Call(id, es) -> 
+   | Call(id, es), _ -> 
       sprintf "%s(%s)"
       (f id)
       (f_list es (String.concat ~sep:","))
-   | BindMatch(lhs_patc, rhs) -> sprintf "%s=%s" (f lhs_patc) (f rhs)
-   | CaseMatch _ -> "TODO"
-   | Assert _ -> "TODO"
-   | With _ -> "TODO"
+   | BindMatch(lhs_patc, rhs), _ -> sprintf "%s=%s" (f lhs_patc) (f rhs)
+   | CaseMatch _, _ -> raise Unimplemented
+   | Assert _, _ -> raise Unimplemented
+   | With _, _ -> raise Unimplemented
+
 
 let rec ast_format: 't. ('t, 'top) gen_ast -> string = fun e ->
    shallow_format {f = ast_format} e

@@ -9,16 +9,16 @@ type dst = <
    letin: no>
 
 
-let rec flatten_scope: type ty. (ty, src) gen_ast -> (ty, dst) gen_ast = fun tree ->
-   let sha_flatten_scope: (ty, src, dst) flex_ast -> (ty, dst) gen_ast = shallow_map {f = flatten_scope} in
+let rec flatten_scope_naked: type ty. (ty, src) naked_gen_ast -> (ty, dst) naked_gen_ast = fun tree ->
+   let sha_flatten_scope: (ty, src, dst) naked_flex_ast -> (ty, dst) naked_gen_ast = shallow_map_naked {f = flatten_scope} in
    let rec flatten (es: src exp_t list): dst exp_t list =
       List.fold_left
          es
          ~init: []
          ~f:(fun acc ele ->
             match ele with
-            | Seq(Scopeless, es) -> acc @ (flatten es)
-            | Seq(Scopeful, es) -> acc @ [SeqScope(flatten es)]
+            | Seq(Scopeless, es), _ -> acc @ (flatten es)
+            | Seq(Scopeful, es), ann -> acc @ [SeqScope(flatten es), ann]
             | e -> acc @ [flatten_scope e])
    in
    match tree with
@@ -40,3 +40,7 @@ let rec flatten_scope: type ty. (ty, src) gen_ast -> (ty, dst) gen_ast = fun tre
    | App _ as e -> sha_flatten_scope e
    | BindOnly _ as e -> sha_flatten_scope e
    | ConcreteCaseMatch _ as e -> sha_flatten_scope e
+
+and flatten_scope: type ty. (ty, src) gen_ast -> (ty, dst) gen_ast = fun tree ->
+   let ast, ann = tree
+   in flatten_scope_naked ast, ann
