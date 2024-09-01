@@ -50,3 +50,14 @@ open Core
 
 let binops_ranked =
    List.group binop_list ~break:(fun l_op r_op -> not (phys_equal l_op.precedence r_op.precedence))
+
+type unary_operator = 
+   {
+      name: string;
+      type_signature: yula_type;
+   }
+
+let unop_list = 
+   [
+      { name= "not"; type_signature= TArrow(t_bool, t_bool) }
+   ]

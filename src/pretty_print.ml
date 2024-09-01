@@ -25,7 +25,12 @@ let rec pretty_print_type (v: yula_type) =
   | TArrow(lhs, rhs) -> 
       Printf.sprintf "%s -> %s" (pretty_print_type lhs) (pretty_print_type rhs) 
   | TList(inner) -> Printf.sprintf "list(%s)" (pretty_print_type inner)
-  | TTuple(tys) -> Printf.sprintf "(%s)" (List.map ~f:pretty_print_type tys |> String.concat ~sep:" ")
+  | TTupleCons _ as ty ->
+      let rec gen acc ty =
+         match ty with 
+         | TTupleCons (car, cdr) -> gen (acc ^ ((pretty_print_type car) ^ ",")) cdr
+         | ty -> acc ^ (pretty_print_type ty) ^ ")"
+      in gen "(" ty
   | TUnion(tys) -> (List.map ~f:pretty_print_type tys |> String.concat ~sep:" | ")
   | TTagged(tag, ty) -> Printf.sprintf ":%s(%s)" tag (pretty_print_type ty)
   | TCon ty -> ty
@@ -79,7 +84,6 @@ let shallow_format
    (* expression *)
    | Val(v), _ -> f v
    | Lit(a), _ -> string_of_atom a
-   | Unary(g, x), _ -> sprintf "(%s %s)" (string_of_un_op g) (f x)
    | Fix(e), _ -> sprintf "fix(%s)" (f e)
    | Seq(Scopeful, es), _ -> sprintf "(#%s)" (f_list es (String.concat ~sep:";"))
    | Seq(Scopeless, es), _ -> sprintf "(%s)" (f_list es (String.concat ~sep:";"))
@@ -89,9 +93,9 @@ let shallow_format
          (f test)
          (f _then)
          (f _else)
-   | Tuple(es), _ ->
-         sprintf "(%s)" (f_list es (String.concat ~sep:","))
-   | KthTuple _, _ -> raise Unimplemented
+   | Tuple(e1, e2, e_rest), _ ->
+         sprintf "(%s)" (f_list (e1 :: e2 :: e_rest) (String.concat ~sep:","))
+   | IndexTuple _, _ -> raise Unimplemented
    | List(es), _ -> 
          sprintf "[%s]" (f_list es (String.concat ~sep:","))
    | LamPat(pats, body), _ -> 

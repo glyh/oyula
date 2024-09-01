@@ -57,23 +57,6 @@ let roperator (type a) (tok: a t): a t =  tok_nl_star *> (token tok)
 
 let op_as = operator (string "::")
 
-(*let op_mul = operator (char '*') *> return (bin MUL)*)
-(*let op_div = operator (char '/') *> return (bin DIV)*)
-(**)
-(*let op_add = operator (char '+') *> return (bin ADD)*)
-(*let op_sub = operator (char '-') *> return (bin SUB)*)
-(**)
-(*let op_eq = operator (string "==") *> return (bin EQ)*)
-(*let op_ne = operator (string "!=") *> return (bin NE)*)
-(*let op_le = operator (string "<=") *> return (bin LE)*)
-(*let op_ge = operator (string ">=") *> return (bin GE)*)
-(*let op_lt = operator (string "<") *> return (bin LT)*)
-(*let op_gt = operator (string ">") *> return (bin GT)*)
-(**)
-(*let op_and = operator (string "and") *> return (bin AND)*)
-(**)
-(*let op_or = operator (string "or") *> return (bin OR)*)
-
 let op_lpar = operator (char '(')
 let rop_rpar = token (char ')')
 let op_lbkt = operator (char '[')
@@ -226,7 +209,12 @@ let type_expression: yula_type t =
     let untiered = 
       (op_lpar *> type_expression <* op_lpar)
       <|> (((string "list(" |> token) *> type_expression <* rop_rpar) >>| fun texp -> TList texp)
-      <|> (wrapped_list op_lpar rop_rpar op_comma type_expression >>| (fun texps -> TTuple texps))
+      <|> (wrapped_list op_lpar rop_rpar op_comma type_expression >>| 
+          fun texps ->
+          match List.rev texps with
+          | [] -> raise Unreachable
+          | ty :: ty_rest -> List.fold_left ty_rest ~init:ty ~f: (fun acc ele -> TTupleCons(ele, acc))
+        )
       <|> lift4 (fun kw _ inner _ -> TTagged(kw, inner))
         keyword_no_ws
         (token (char '('))
@@ -247,22 +235,17 @@ let type_expression: yula_type t =
     let arrowed = tier_right unioned (tok_arrow *> return (fun lhs rhs ->  TArrow(lhs, rhs))) in
     arrowed)
 
-(*let tier_left e op =*)
-(*  reduce_left e e op*)
-(**)
-(*let tier_right e op = *)
-(*  fix (fun tier_right ->*)
-(*    lift3 *)
-(*    (fun lhs op rhs -> op lhs rhs)*)
-(*    e*)
-(*    op*)
-(*    tier_right)*)
+let delimitize (s: string): string = 
+  (* no need to prepend *)
+  let postpend = 
+    match String.to_list_rev s with
+    | c :: _ when Char.is_alpha c -> " "
+    | _ -> ""
+  in
+  s ^ postpend
 
-    (*let factor = tier_left annotated (op_mul <|> op_div) in*)
-    (*let term = tier_left factor (op_add <|> op_sub) in *)
-    (*let predicate = tier_left term (op_eq <|> op_ne <|> op_le <|> op_ge <|> op_lt <|> op_gt) in *)
-    (*let pred_conjunct = tier_left predicate op_and in *)
-    (*let pred_disjunct = tier_left pred_conjunct op_or in *)
+let op_parser_s (s: string) = 
+  s |> delimitize |> string |> operator
 
 let binop_tiers (inner: top exp_t t): top exp_t t =
   List.fold_left
@@ -273,7 +256,7 @@ let binop_tiers (inner: top exp_t t): top exp_t t =
       | [] -> raise Unreachable
       | op :: op_rest -> 
         let op_parser (op: binary_operator) = 
-          (operator (string op.name))
+          op_parser_s op.name
           *> return (fun lhs rhs ->
             Call((Concrete op.name, ann_default), [lhs; rhs]), ann_default) in
         let ops_parser = List.fold_left
@@ -316,14 +299,29 @@ let _expression (pattern_complex: top pat_complex_t t) (pattern: top pat_t t): t
         maybe_annotate_postfix
     in
 
-    let tiered = binop_tiers annotated in
-
-    (*(* TODO: refactor binary operators in to tiers *)*)
-    (*let factor = tier_left annotated (op_mul <|> op_div) in*)
-    (*let term = tier_left factor (op_add <|> op_sub) in *)
-    (*let predicate = tier_left term (op_eq <|> op_ne <|> op_le <|> op_ge <|> op_lt <|> op_gt) in *)
-    (*let pred_conjunct = tier_left predicate op_and in *)
-    (*let pred_disjunct = tier_left pred_conjunct op_or in *)
+    let unary_op =
+      let uop_parsers: (top exp_t -> top exp_t) t list = 
+        unop_list
+        |> List.map ~f:(fun op ->
+          (op_parser_s op.name)
+          *> (return (fun inner -> Call((Concrete op.name, ann_default), [inner]), ann_default)))
+      in
+      match uop_parsers with
+      | [] -> raise Unreachable
+      | op :: op_rest -> 
+          List.fold_left
+          ~init: op
+          ~f: (fun acc ele -> acc <|> ele)
+          op_rest
+    in
+    let unary_wrapped = 
+      lift2 (fun ops annotated -> List.fold_right
+        ~f:(fun f acc -> f acc)
+        ~init:annotated ops)
+        (many unary_op)
+        annotated
+    in 
+    let tiered = binop_tiers unary_wrapped in
 
     let seq_exp = lift2
       (fun head rest -> 
@@ -414,6 +412,11 @@ let%test_module "parsing" = (module struct
   let%test "comments" =
     let to_parse = "a = 1 + 3 * #|nested #|comments|# just like #|this one|#|#  4  #and also line comments" in
     let expected = "a=(1 + (3 * 4))" in
+    ast_expect expression expected to_parse
+
+  let%test "simple unary" =
+    let to_parse = "not true" in
+    let expected = "not(true)" in
     ast_expect expression expected to_parse
 
   let%test "rec pattern" =

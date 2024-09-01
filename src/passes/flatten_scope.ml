@@ -3,10 +3,12 @@ open Oyula_lib.Ast
 
 type src = Curryfy.dst
 type dst = <
-   pattern: no;
    currying: yes;
    scoped_seq: yes;
-   letin: no>
+   letin: no;
+   typed: no;
+   pattern: yes;
+>
 
 
 let rec flatten_scope_naked: type ty. (ty, src) naked_gen_ast -> (ty, dst) naked_gen_ast = fun tree ->
@@ -18,7 +20,7 @@ let rec flatten_scope_naked: type ty. (ty, src) naked_gen_ast -> (ty, dst) naked
          ~f:(fun acc ele ->
             match ele with
             | Seq(Scopeless, es), _ -> acc @ (flatten es)
-            | Seq(Scopeful, es), ann -> acc @ [SeqScope(flatten es), ann]
+            | Seq(Scopeful, es), AnnEmpty ann -> acc @ [SeqScope(flatten es), AnnEmpty ann]
             | e -> acc @ [flatten_scope e])
    in
    match tree with
@@ -28,18 +30,27 @@ let rec flatten_scope_naked: type ty. (ty, src) naked_gen_ast -> (ty, dst) naked
    | Assert _ as e -> sha_flatten_scope e
    | Val _ as e -> sha_flatten_scope e
    | Lit _ as e -> sha_flatten_scope e
-   | Unary _ as e -> sha_flatten_scope e
    | Fix _ as e -> sha_flatten_scope e
    | If _ as e -> sha_flatten_scope e
    | Tuple _ as e -> sha_flatten_scope e
-   | KthTuple _ as e -> sha_flatten_scope e
+   | IndexTuple _ as e -> sha_flatten_scope e
    | List _ as e -> sha_flatten_scope e
-   | Abs _ as e -> sha_flatten_scope e
    | AbsU _ as e -> sha_flatten_scope e
    | App _ as e -> sha_flatten_scope e
-   | BindOnly _ as e -> sha_flatten_scope e
-   | ConcreteCaseMatch _ as e -> sha_flatten_scope e
+   | Bind _ as e -> sha_flatten_scope e
+   | Lens _ as e -> sha_flatten_scope e
+   | Union _ as e -> sha_flatten_scope e
+   | Updatable _ as e -> sha_flatten_scope e
+   | Pin _ as e -> sha_flatten_scope e
+   | PatTuple _ as e -> sha_flatten_scope e
+   | PatList _ as e -> sha_flatten_scope e
+   | PLit _ as e -> sha_flatten_scope e
+   | PAny _ as e -> sha_flatten_scope e
+   | With _ as e -> sha_flatten_scope e
+   | PatComplex _ as e -> sha_flatten_scope e
+   | AbsPat _ as e -> sha_flatten_scope e
+   | BindMatch _ as e -> sha_flatten_scope e
+   | CaseMatch _ as e -> sha_flatten_scope e
 
-and flatten_scope: type ty. (ty, src) gen_ast -> (ty, dst) gen_ast = fun tree ->
-   let ast, ann = tree
-   in flatten_scope_naked ast, ann
+and flatten_scope: type ty. (ty, src) gen_ast -> (ty, dst) gen_ast = fun (ast, AnnEmpty ann_inner) ->
+   flatten_scope_naked ast, AnnEmpty ann_inner
