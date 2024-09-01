@@ -1,4 +1,7 @@
 open Ast
+open Pretty_print
+
+exception Unreachable
 
 (*NOTE: 
   This typechecker is loosely based on:
@@ -8,7 +11,15 @@ open Ast
   - https://cs3110.github.io/textbook/chapters/interp/inference.html
 *)
 
-exception UndefinedVariable of string
+type src = top
+type dst = <
+   typed: yes;
+   pattern: yes;
+   currying: no;
+   scoped_seq: no;
+   letin: no>
+
+exception UndefinedVariable of top id_t
 exception Unimplemented
 exception NotEnoughConstraint of yula_type
 
@@ -118,7 +129,7 @@ let rec unify (cs: type_constraint list): subst =
     | None, cs_new -> unify (cs_new @ cs)
     end
 
-let rec generalize (cs: type_constraint list) (env: type_env) (var: top id_t) (ty: yula_type): type_env = 
+let generalize (cs: type_constraint list) (env: type_env) (var: top id_t) (ty: yula_type): type_env = 
   let sub_solved = unify cs in
   let env_new = apply_sub_env sub_solved env in
   let fv_env_new = free_variables_env env_new in
@@ -128,32 +139,25 @@ let rec generalize (cs: type_constraint list) (env: type_env) (var: top id_t) (t
   let ty_generalized = TForall(vars_to_generalize, ty_new) in
   TypeEnv.add var ty_generalized env_new
 
-type src = top
-(*type dst = <*)
-(*   typed: yes;*)
-(*   pattern: yes;*)
-(*   currying: no;*)
-(*   scoped_seq: no;*)
-(*   letin: no>*)
-type dst = src
-
 let rec inference_constraints: 
-  type ty. 
   type_env -> 
-  (ty, src) gen_ast -> 
+  (exp, src) gen_ast -> 
   (yula_type * type_constraint list) = 
   fun tenv tree ->
   let tree_naked, _ = tree in
   match tree_naked with
-  | Lit (Unit) -> (t_unit, [])
-  | Lit(Int _) -> (t_int, [])
-  | Lit(Char _) -> (t_char, [])
-  | Lit(Bool _) -> (t_bool, [])
+  | Lit (Unit) -> t_unit, []
+  | Lit (Int _) -> t_int, []
+  | Lit (Char _) -> t_char, []
+  | Lit (Bool _) -> t_bool, []
+  | Lit (F64 _) -> t_f64, []
+  | Lit (Str _) -> t_string, []
+  | Lit (Keyword _) -> t_keyword, []
 
-  | Fix(lam) ->
-      let f_gen = TVar (gen_tvar ()) in
-      let wrapped_gen = TVar (gen_tvar ()) in
-      let (lam_ty, lam_cons) = inference_constraints tenv lam in
+  | Fix(lam) ->  (* fix: (A -> B) -> B *)
+      let f_gen (* B *)= TVar (gen_tvar ()) in
+      let wrapped_gen (* A *) = TVar (gen_tvar ()) in
+      let (lam_ty (* A -> B *), lam_cons) = inference_constraints tenv lam in
       f_gen, (lam_ty, TArrow(wrapped_gen, f_gen)) :: lam_cons
 
   | Val(var) -> 
@@ -162,27 +166,33 @@ let rec inference_constraints:
       | Some(scheme) -> (instantiate(scheme), [])
       end
 
-  | Lam(var, body) -> 
-      let var_gen = TVar (gen_tvar ()) in
-      let tenv_new = 
-        TypeEnv.add var var_gen tenv
-      in
-      let (body_type, constraints) = 
-        inference_constraints tenv_new body
-      in
-      (TArrow(var_gen, body_type), constraints)
-
   | If(cond, then_clause, else_clause) ->
       let (cond_ty, cond_cons) = inference_constraints tenv cond in
       let (then_ty, then_cons) = inference_constraints tenv then_clause in
       let (else_ty, else_cons) = inference_constraints tenv else_clause in
       (then_ty, [(cond_ty, t_bool); (then_ty, else_ty)] @ cond_cons @ then_cons @ else_cons)
 
-  | App(f, x) ->
-      let (f_ty, f_cons) = inference_constraints tenv f in
-      let (x_ty, x_cons) = inference_constraints tenv x in
-      let var_gen = TVar (gen_tvar ()) in
-      (var_gen, [(f_ty, TArrow(x_ty, var_gen))] @ f_cons @ x_cons)
+  | Assert (inner) ->
+      let (inner_ty, inner_cons) = inference_constraints tenv inner in
+      (t_bool, (t_bool, inner_ty) :: inner_cons)
+
+  | _ -> raise Unreachable
+
+  (*| App(f, x) ->*)
+  (*    let (f_ty, f_cons) = inference_constraints tenv f in*)
+  (*    let (x_ty, x_cons) = inference_constraints tenv x in*)
+  (*    let var_gen = TVar (gen_tvar ()) in*)
+  (*    (var_gen, [(f_ty, TArrow(x_ty, var_gen))] @ f_cons @ x_cons)*)
+  (**)
+  (*| Lam(var, body) -> *)
+  (*    let var_gen = TVar (gen_tvar ()) in*)
+  (*    let tenv_new = *)
+  (*      TypeEnv.add var var_gen tenv*)
+  (*    in*)
+  (*    let (body_type, constraints) = *)
+  (*      inference_constraints tenv_new body*)
+  (*    in*)
+  (*    (TArrow(var_gen, body_type), constraints)*)
 
 let show_cons ((tlhs, trhs): type_constraint): string = 
   pretty_print_type tlhs ^ " = " ^ pretty_print_type trhs
@@ -190,7 +200,7 @@ let show_cons ((tlhs, trhs): type_constraint): string =
 let show_sub (smap: subst): string =
   MapSubs.fold
   (fun k v acc ->
-    string_of_int k ^ " -> " ^ pretty_print_type v ^ "\n" ^ acc
+    k ^ " -> " ^ pretty_print_type v ^ "\n" ^ acc
   )
   smap
   ""

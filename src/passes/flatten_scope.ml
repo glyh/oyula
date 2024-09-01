@@ -28,7 +28,6 @@ let rec flatten_scope_naked: type ty. (ty, src) naked_gen_ast -> (ty, dst) naked
    | Assert _ as e -> sha_flatten_scope e
    | Val _ as e -> sha_flatten_scope e
    | Lit _ as e -> sha_flatten_scope e
-   | Binary _ as e -> sha_flatten_scope e
    | Unary _ as e -> sha_flatten_scope e
    | Fix _ as e -> sha_flatten_scope e
    | If _ as e -> sha_flatten_scope e

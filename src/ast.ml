@@ -2,9 +2,8 @@
 
 module Base_Map = Map
 
-type tvar = top id_t
-let equal_tvar lhs rhs =
-   raise Unimplemented
+type tvar = string
+   [@@deriving eq]
 
 module TypeVarSet = Set.Make(struct
    type t = tvar
@@ -42,31 +41,6 @@ let gen_tvar: unit -> tvar =
   fun () -> 
     uid := !uid + 1;
     Printf.sprintf "__gen_%d" !uid
-
-let pretty_print_var_set (s: type_var_set) =
-  s
-  |> TypeVarSet.to_seq
-  |> List.of_seq
-  |> String.concat ","
-
-let rec pretty_print_type (v: yula_type) =
-  match v with
-  | TForall(vars, inner) -> 
-      Printf.sprintf
-      "forall %s: %s"
-        (pretty_print_var_set vars)
-        (pretty_print_type inner)
-  | TVar v -> v
-  | TArrow(TArrow _ as lhs, rhs) ->
-      Printf.sprintf "(%s) -> %s" (pretty_print_type lhs) (pretty_print_type rhs) 
-  | TArrow(lhs, rhs) -> 
-      Printf.sprintf "%s -> %s" (pretty_print_type lhs) (pretty_print_type rhs) 
-  | TList(inner) -> Printf.sprintf "list(%s)" (pretty_print_type inner)
-  | TTuple(tys) -> Printf.sprintf "(%s)" (List.map pretty_print_type tys |> String.concat " ")
-  | TUnion(tys) -> (List.map pretty_print_type tys |> String.concat " | ")
-  | TTagged(tag, ty) -> Printf.sprintf ":%s(%s)" tag (pretty_print_type ty)
-  | TCon ty -> ty
-
 
 (* Ast *)
 let poly_compare = compare
@@ -127,17 +101,6 @@ let escape str =
    |> String.to_array
    |> Array.fold ~init:"" ~f:append_escape
 
-let string_of_atom (a: atom) = 
-   match a with
-   | Int i -> string_of_int i
-   | F64 f -> string_of_float f
-   | Str s -> sprintf {|"%s"|} (escape s)
-   | Keyword k -> ":" ^ k
-   | Bool true -> "True"
-   | Bool false -> "False"
-   | Unit -> "()"
-   | Char c -> sprintf {|'%s'|} (append_escape "" c)
-
 (* Random: we may extend GADT by allowing same constructor to be overloaded *)
 (* https://icfp23.sigplan.org/details/ocaml-2023-papers/4/Modern-DSL-compiler-architecture-in-OCaml-our-experience-with-Catala *)
 
@@ -162,8 +125,8 @@ and ('ty, 'a) naked_gen_ast = ('ty, 'a, 'a) naked_flex_ast
 and ('ty, 'd, 's) flex_ast = ('ty, 'd, 's) naked_flex_ast * ('ty, 's) annotation
 
 and ('ty, 'feat) annotation =
-   | AnnEmpty: unit -> ('ty, <typed: no; ..> as 'feat) annotation
-   | AnnTyped: {ast_type: yula_type option} -> ('ty, <typed: yes; ..> as 'feat) annotation
+   | AnnEmpty: {ast_type: yula_type option} -> ('ty, <typed: no; ..> as 'feat) annotation
+   | AnnTyped: {ast_type: yula_type} -> ('ty, <typed: yes; ..> as 'feat) annotation
 
 (* 'd means underlaying structure, while 's means surface structure *)
 and ('ty, 'd, 's) naked_flex_ast = 
@@ -224,10 +187,6 @@ and ('ty, 'd, 's) naked_flex_ast =
 
    (* EXPRESSION *)
 
-   | TypeAnnotated:
-      'dep exp_t * yula_type
-      -> (exp, 'dep, <typed: no; ..> as 'sur) naked_flex_ast
-
    (* NOTE: a temporary solution, we may add algebraic effects later *)
    | Assert:
    'dep exp_t
@@ -239,10 +198,6 @@ and ('ty, 'd, 's) naked_flex_ast =
 
    | Lit:
    atom
-   -> (exp, 'dep, 'sur) naked_flex_ast
-
-   | Binary:
-   bin_op * 'dep exp_t * 'dep exp_t
    -> (exp, 'dep, 'sur) naked_flex_ast
 
    | Unary:
@@ -324,7 +279,8 @@ and ('ty, 'd, 's) naked_flex_ast =
    ('dep pat_t * 'dep exp_t * 'dep exp_t) list ->
    (exp, 'dep, <pattern: yes; ..> as 'sur) naked_flex_ast
 
-(* Default Annotations *)
+let ann_default = AnnEmpty { ast_type = None }
+
 type top = <
    typed: no;
    pattern: yes;
@@ -345,7 +301,6 @@ module TypeEnv = Base_Map.Make(struct
 end)
 
 type type_env = yula_type TypeEnv.t
-
 
 type ('src, 'dst) desugarer = { f: 't. ('t, 'src) gen_ast -> ('t, 'dst) gen_ast }
 
@@ -390,7 +345,6 @@ let shallow_map_naked
    (* expression *)
    | Val(v) -> Val(f v)
    | Lit(a) -> Lit(a)
-   | Binary(op, lhs, rhs) -> Binary(op, f lhs, f rhs)
    | Unary(g, x) -> Unary(g, f x)
    | Fix(e) -> Fix(f e)
    | Seq(st, es) -> Seq(st, f_list es)
@@ -419,7 +373,6 @@ let shallow_map_naked
    | Assert(e) -> Assert(f e)
    | With(pat, e) -> With(f pat, f e)
    | SeqScope(es) -> SeqScope(f_list es)
-   | TypeAnnotated(exp, ty) -> TypeAnnotated(f exp, ty)
 
 let shallow_map
    (type ty src dst)
@@ -429,74 +382,3 @@ let shallow_map
       let (naked, ann) = e in
       shallow_map_naked f_wrap naked, ann 
 
-type formatter = { f: 't. ('t, top) gen_ast -> string; }
-
-let shallow_format
-   (type ty)
-   (f_wrap: formatter)
-   (t: (ty, top) gen_ast)
-   : string =
-   let f: 't. ('t, top) gen_ast -> string = f_wrap.f in
-   let f_list: 't. ('t, top) gen_ast list -> (string list -> string) -> string = 
-      fun l agg -> List.map ~f:f l |> agg
-   in
-   match t with 
-
-   (* identifier *)
-   | Concrete id, _ -> id
-   | Gensym i, _ -> sprintf "~~%d" i
-
-   (* updatable pattern *)
-   | Bind id, _ -> f id
-   | Lens(obj, _method, args), _ -> 
-         sprintf "%s.%s(%s)" (f obj) (f _method) (f_list args (String.concat ~sep:","))
-
-   (* pattern *)
-   | Union alts, _ -> f_list alts (String.concat ~sep:"|")
-   | Updatable u, _ -> f u
-   | Pin id, _ -> "^" ^ f id
-   | PatTuple ps, _ -> sprintf "(%s)" (f_list ps (String.concat ~sep:","))
-   | PatList ps, _ -> sprintf "[%s]" (f_list ps (String.concat ~sep:","))
-   | PLit a, _ -> string_of_atom a
-   | PAny (), _ -> "_"
-
-   (* pattern complex *)
-   | PatComplex(p, []), _ -> f p
-   | PatComplex(p, ps), _ -> sprintf "%s=%s" (f p) (f_list ps (String.concat ~sep:"="))
-
-   (* expression *)
-   | Val(v), _ -> f v
-   | Lit(a), _ -> string_of_atom a
-   | Binary(op, lhs, rhs), _ -> sprintf "(%s %s %s)" (f lhs) (string_of_bin_op op) (f rhs)
-   | Unary(g, x), _ -> sprintf "(%s %s)" (string_of_un_op g) (f x)
-   | Fix(e), _ -> sprintf "fix(%s)" (f e)
-   | Seq(Scopeful, es), _ -> sprintf "(#%s)" (f_list es (String.concat ~sep:";"))
-   | Seq(Scopeless, es), _ -> sprintf "(%s)" (f_list es (String.concat ~sep:";"))
-   | If(test, _then, _else), _ -> 
-         sprintf 
-         "if %s: %s else: %s"
-         (f test)
-         (f _then)
-         (f _else)
-   | Tuple(es), _ ->
-         sprintf "(%s)" (f_list es (String.concat ~sep:","))
-   | KthTuple _, _ -> raise Unimplemented
-   | List(es), _ -> 
-         sprintf "[%s]" (f_list es (String.concat ~sep:","))
-   | LamPat(pats, body), _ -> 
-         sprintf "fn(%s): %s"
-         (f_list pats (String.concat ~sep:","))
-         (f body)
-   | Call(id, es), _ -> 
-      sprintf "%s(%s)"
-      (f id)
-      (f_list es (String.concat ~sep:","))
-   | BindMatch(lhs_patc, rhs), _ -> sprintf "%s=%s" (f lhs_patc) (f rhs)
-   | TypeAnnotated(inner, ty), _ -> sprintf "(%s::%s)" (f inner) (pretty_print_type ty)
-   | CaseMatch _, _ -> raise Unimplemented
-   | Assert _, _ -> raise Unimplemented
-   | With _, _ -> raise Unimplemented
-
-
-let rec ast_format: 't. ('t, 'top) gen_ast -> string = fun e ->
-   shallow_format {f = ast_format} e

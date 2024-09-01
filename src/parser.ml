@@ -1,6 +1,10 @@
 open Core
 open Angstrom
 open Ast
+open Pretty_print
+open Operators
+
+exception Unreachable
 
 (* Comments *)
 
@@ -48,29 +52,27 @@ let tok_nl = token (char '\n')
 let tok_nl_star = many tok_nl
 let tok_nl_plus = many1 tok_nl
 
-let bin op lhs rhs = Binary(op, lhs, rhs), AnnEmpty()
-
 let operator (type a) (tok: a t): a t = (token tok) <* tok_nl_star 
 let roperator (type a) (tok: a t): a t =  tok_nl_star *> (token tok)
 
 let op_as = operator (string "::")
 
-let op_mul = operator (char '*') *> return (bin MUL)
-let op_div = operator (char '/') *> return (bin DIV)
-
-let op_add = operator (char '+') *> return (bin ADD)
-let op_sub = operator (char '-') *> return (bin SUB)
-
-let op_eq = operator (string "==") *> return (bin EQ)
-let op_ne = operator (string "!=") *> return (bin NE)
-let op_le = operator (string "<=") *> return (bin LE)
-let op_ge = operator (string ">=") *> return (bin GE)
-let op_lt = operator (string "<") *> return (bin LT)
-let op_gt = operator (string ">") *> return (bin GT)
-
-let op_and = operator (string "and") *> return (bin AND)
-
-let op_or = operator (string "or") *> return (bin OR)
+(*let op_mul = operator (char '*') *> return (bin MUL)*)
+(*let op_div = operator (char '/') *> return (bin DIV)*)
+(**)
+(*let op_add = operator (char '+') *> return (bin ADD)*)
+(*let op_sub = operator (char '-') *> return (bin SUB)*)
+(**)
+(*let op_eq = operator (string "==") *> return (bin EQ)*)
+(*let op_ne = operator (string "!=") *> return (bin NE)*)
+(*let op_le = operator (string "<=") *> return (bin LE)*)
+(*let op_ge = operator (string ">=") *> return (bin GE)*)
+(*let op_lt = operator (string "<") *> return (bin LT)*)
+(*let op_gt = operator (string ">") *> return (bin GT)*)
+(**)
+(*let op_and = operator (string "and") *> return (bin AND)*)
+(**)
+(*let op_or = operator (string "or") *> return (bin OR)*)
 
 let op_lpar = operator (char '(')
 let rop_rpar = token (char ')')
@@ -156,7 +158,7 @@ let atom: atom t =
   <|> atom_unit
 
 let identifier: top id_t t =
-  tok_id >>| fun id -> Concrete id, AnnEmpty()
+  tok_id >>| fun id -> Concrete id, ann_default
 
 let _block (type a) (expression: top exp_t t) (block_terminator: a t): top exp_t list t =
   (tok_colon *> expression >>| (fun x -> [x]))
@@ -167,7 +169,7 @@ let _block_alt (type a b) (expression: top exp_t t) (block_terminator_exp: a t) 
   <|> (tok_nl_plus *> (many_till (expression <* tok_nl_plus) block_terminator_blk))
 
 let id_to_lhs (id: top id_t): top pat_t =
-  Updatable(Bind(id), AnnEmpty()), AnnEmpty()
+  Updatable(Bind(id), ann_default), ann_default
 
 let if_stmt (expression: top exp_t t): top exp_t t =
   let block_alt (type a b) (term_exp: a t) (term_blk: b t) = _block_alt expression term_exp term_blk in
@@ -175,9 +177,9 @@ let if_stmt (expression: top exp_t t): top exp_t t =
     lift4
       (fun _ cond then_clause else_clause -> 
         If(cond, 
-          (Seq(Scopeful, then_clause), AnnEmpty()), 
-          (Seq(Scopeful, else_clause), AnnEmpty())),
-          AnnEmpty()) 
+          (Seq(Scopeful, then_clause), ann_default), 
+          (Seq(Scopeful, else_clause), ann_default)),
+          ann_default) 
       tok_if
       expression
       (block_alt tok_else tok_else)
@@ -186,7 +188,7 @@ let if_stmt (expression: top exp_t t): top exp_t t =
 let do_stmt (expression: top exp_t t): top exp_t t =
   let block (type a) (term: a t) = _block expression term in
     lift2
-    (fun _ exps -> Seq(Scopeful, exps), AnnEmpty())
+    (fun _ exps -> Seq(Scopeful, exps), ann_default)
     tok_do
     (block tok_end)
 
@@ -194,12 +196,12 @@ let lambda (pattern_complex: top pat_complex_t t) (expression: top exp_t t): top
   let block (type a) (term: a t) = _block expression term in
   let params_list = wrapped_list op_lpar rop_rpar op_comma pattern_complex in
     lift4 (fun _ id params blk -> 
-      let fn = (LamPat(params, (Seq(Scopeful, blk), AnnEmpty())), AnnEmpty()) in
+      let fn = (LamPat(params, (Seq(Scopeful, blk), ann_default)), ann_default) in
       match id with
       | Some(id, _) -> 
           BindMatch(
             (PatComplex(
-              (Updatable(Bind(id, AnnEmpty()), AnnEmpty()), AnnEmpty()), []), AnnEmpty()), fn), AnnEmpty()
+              (Updatable(Bind(id, ann_default), ann_default), ann_default), []), ann_default), fn), ann_default
       | None -> fn
     )
     tok_fn
@@ -209,11 +211,11 @@ let lambda (pattern_complex: top pat_complex_t t) (expression: top exp_t t): top
 
 let match_stmt (pattern: top pat_t t) (expression: top exp_t t): top exp_t t =
   lift4 (fun is_rec p ps rhs -> 
-    let pc = PatComplex(p, ps), AnnEmpty() in
+    let pc = PatComplex(p, ps), ann_default in
     if is_rec then
-      BindMatch(pc, (Fix((LamPat([pc], rhs), AnnEmpty())), AnnEmpty())), AnnEmpty()
+      BindMatch(pc, (Fix((LamPat([pc], rhs), ann_default)), ann_default)), ann_default
     else 
-      BindMatch(pc, rhs), AnnEmpty())
+      BindMatch(pc, rhs), ann_default)
     (option false (tok_rec *> return true))
     (pattern <* tok_match)
     (many (pattern <* tok_match))
@@ -245,48 +247,91 @@ let type_expression: yula_type t =
     let arrowed = tier_right unioned (tok_arrow *> return (fun lhs rhs ->  TArrow(lhs, rhs))) in
     arrowed)
 
+(*let tier_left e op =*)
+(*  reduce_left e e op*)
+(**)
+(*let tier_right e op = *)
+(*  fix (fun tier_right ->*)
+(*    lift3 *)
+(*    (fun lhs op rhs -> op lhs rhs)*)
+(*    e*)
+(*    op*)
+(*    tier_right)*)
+
+    (*let factor = tier_left annotated (op_mul <|> op_div) in*)
+    (*let term = tier_left factor (op_add <|> op_sub) in *)
+    (*let predicate = tier_left term (op_eq <|> op_ne <|> op_le <|> op_ge <|> op_lt <|> op_gt) in *)
+    (*let pred_conjunct = tier_left predicate op_and in *)
+    (*let pred_disjunct = tier_left pred_conjunct op_or in *)
+
+let binop_tiers (inner: top exp_t t): top exp_t t =
+  List.fold_left
+    binops_ranked
+    ~init: inner
+    ~f:(fun previous_tier ops ->
+      match ops with
+      | [] -> raise Unreachable
+      | op :: op_rest -> 
+        let op_parser (op: binary_operator) = 
+          (operator (string op.name))
+          *> return (fun lhs rhs ->
+            Call((Concrete op.name, ann_default), [lhs; rhs]), ann_default) in
+        let ops_parser = List.fold_left
+          op_rest
+          ~init:(op_parser op)
+          ~f:(fun acc ele -> acc <|> op_parser ele)
+        in
+        let tier = if phys_equal op.assoc Left then tier_left else tier_right in
+
+        tier previous_tier ops_parser
+    )
+
 let _expression (pattern_complex: top pat_complex_t t) (pattern: top pat_t t): top exp_t t =
   fix (fun expression -> 
     let arg_list = wrapped_list op_lpar rop_rpar op_comma expression in
     let function_call = lift2 (fun fn args -> (fn, args)) identifier arg_list in
     let primary =
       op_lpar *> expression <* rop_rpar
-      <|> (function_call >>| fun (fn, args) -> Call(fn, args), AnnEmpty())
-      <|> (atom >>| fun a -> Lit a, AnnEmpty())
-      <|> (identifier >>| fun id -> Val id, AnnEmpty())
+      <|> (function_call >>| fun (fn, args) -> Call(fn, args), ann_default)
+      <|> (atom >>| fun a -> Lit a, ann_default)
+      <|> (identifier >>| fun id -> Val id, ann_default)
     in
+
     let ufcs = 
       reduce_left
       primary
       function_call
-      (op_dot *> return (fun inner (fn, args) -> Call(fn, inner :: args), AnnEmpty())) in
+      (op_dot *> return (fun inner (fn, args) -> Call(fn, inner :: args), ann_default))
+    in
 
     let maybe_annotate_postfix =
       option None (op_as *> type_expression >>| fun ty -> Some ty)
     in
-
-    let annonated = 
-      lift2 (fun exp annotation -> 
-        match annotation with
-        | None -> exp
-        | Some(ty) -> TypeAnnotated(exp, ty), AnnEmpty()
-      )
-      ufcs
-      maybe_annotate_postfix
+    let annotated = 
+      lift2 
+        (fun (exp, AnnEmpty ann_original) ann_ty -> 
+          exp, AnnEmpty { ann_original with ast_type = ann_ty} [@warning "-23"]
+        )
+        ufcs
+        maybe_annotate_postfix
     in
 
-    let factor = tier_left annonated (op_mul <|> op_div) in
-    let term = tier_left factor (op_add <|> op_sub) in 
-    let predicate = tier_left term (op_eq <|> op_ne <|> op_le <|> op_ge <|> op_lt <|> op_gt) in 
-    let pred_conjunct = tier_left predicate op_and in 
-    let pred_disjunct = tier_left pred_conjunct op_or in 
+    let tiered = binop_tiers annotated in
+
+    (*(* TODO: refactor binary operators in to tiers *)*)
+    (*let factor = tier_left annotated (op_mul <|> op_div) in*)
+    (*let term = tier_left factor (op_add <|> op_sub) in *)
+    (*let predicate = tier_left term (op_eq <|> op_ne <|> op_le <|> op_ge <|> op_lt <|> op_gt) in *)
+    (*let pred_conjunct = tier_left predicate op_and in *)
+    (*let pred_disjunct = tier_left pred_conjunct op_or in *)
+
     let seq_exp = lift2
       (fun head rest -> 
         match rest with
         | [] -> head
-        | rest -> Seq(Scopeless, head :: rest), AnnEmpty())
-      pred_disjunct
-      (many (op_semicol *> pred_disjunct)) in 
+        | rest -> Seq(Scopeless, head :: rest), ann_default)
+      tiered
+      (many (op_semicol *> tiered)) in 
     let expr_like = seq_exp in
 
     (do_stmt expression)
@@ -296,17 +341,17 @@ let _expression (pattern_complex: top pat_complex_t t) (pattern: top pat_t t): t
     <|> expr_like)
 
 let _pattern_complex (pattern: top pat_t t): top pat_complex_t t =
-  lift2 (fun p ps -> PatComplex(p, ps), AnnEmpty()) pattern (many (tok_match *> pattern)) 
+  lift2 (fun p ps -> PatComplex(p, ps), ann_default) pattern (many (tok_match *> pattern)) 
 
 let _updatable_pattern (pattern: top pat_t t): top upd_pat_t t =
   let expression = _expression (_pattern_complex pattern) pattern in
 
   let arg_list = wrapped_list op_lpar rop_rpar op_comma expression in
-  let bind = identifier >>| fun b -> Bind b, AnnEmpty() in
+  let bind = identifier >>| fun b -> Bind b, ann_default in
   let upd_primary = bind in
   let rec go_lens acc = 
     (lift3
-     (fun _ _method args -> Lens(acc, _method, args), AnnEmpty())
+     (fun _ _method args -> Lens(acc, _method, args), ann_default)
      op_dot
      identifier
      arg_list
@@ -321,13 +366,13 @@ let pattern: top pat_t t =
     let updatable_pattern = _updatable_pattern pattern in
     let expression = _expression pattern_complex pattern in
 
-    let plit = atom >>| fun a -> PLit a, AnnEmpty() in
-    let pany = tok_underscore *> (return (PAny (), AnnEmpty())) in
-    let pupdatable = updatable_pattern >>| fun up -> Updatable up, AnnEmpty() in
-    let plist = wrapped_list op_lbkt rop_rbkt op_comma pattern >>| fun ps -> PatList ps, AnnEmpty() in
+    let plit = atom >>| fun a -> PLit a, ann_default in
+    let pany = tok_underscore *> (return (PAny (), ann_default)) in
+    let pupdatable = updatable_pattern >>| fun up -> Updatable up, ann_default in
+    let plist = wrapped_list op_lbkt rop_rbkt op_comma pattern >>| fun ps -> PatList ps, ann_default in
     let pnest_or_tuple = wrapped_list op_lpar rop_rpar op_comma pattern >>| function
       | [x] -> x
-      | ps -> PatTuple ps, AnnEmpty()
+      | ps -> PatTuple ps, ann_default
     in
     let pprimary =
       pany
@@ -337,11 +382,11 @@ let pattern: top pat_t t =
       <|> pupdatable
     in
     let withed = 
-      pprimary <|> lift3 (fun pat _ cond -> With(pat, cond), AnnEmpty()) pprimary op_with expression
+      pprimary <|> lift3 (fun pat _ cond -> With(pat, cond), ann_default) pprimary op_with expression
     in
     let unioned = sep_list op_pipe withed >>| function 
     | [single] -> single 
-    | ps -> Union ps, AnnEmpty()
+    | ps -> Union ps, ann_default
     in
     unioned
   )

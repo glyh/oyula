@@ -36,7 +36,6 @@ let rec deseq_naked: type ty. (ty, src) naked_gen_ast -> (ty, dst) naked_gen_ast
    | Assert _ as e -> sha_deseq e
    | Val _ as e -> sha_deseq e
    | Lit _ as e -> sha_deseq e
-   | Binary _ as e -> sha_deseq e
    | Unary _ as e -> sha_deseq e
    | Fix _ as e -> sha_deseq e
    | If _ as e -> sha_deseq e

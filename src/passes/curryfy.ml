@@ -1,8 +1,9 @@
 open Core
 open Oyula_lib.Ast
 
-type src = Depat.dst
+type src = Oyula_lib.Type_inference.dst
 type dst = <
+   typed: yes;
    pattern: no;
    currying: yes;
    scoped_seq: no;
@@ -39,7 +40,6 @@ let rec currify_naked: type ty. (ty, src) naked_gen_ast -> (ty, dst) naked_gen_a
    | Assert _ as e -> sha_currify e
    | Val _ as e -> sha_currify e
    | Lit _ as e -> sha_currify e
-   | Binary _ as e -> sha_currify e
    | Unary _ as e -> sha_currify e
    | Fix _ as e -> sha_currify e
    | Seq _ as e -> sha_currify e
